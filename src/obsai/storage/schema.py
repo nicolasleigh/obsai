@@ -5,9 +5,10 @@ import sqlite3
 from obsai.errors import SchemaError
 from obsai.storage.fts import refresh_fts_for_note
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 REQUIRED_TABLES = {
-    "notes", "chunks", "tags", "links", "blocks", "index_state", "dirty_notes", "chunk_fts"
+    "notes", "chunks", "tags", "links", "blocks", "index_state", "dirty_notes", "chunk_fts",
+    "embedding_generations", "embedding_cache", "chunk_embeddings",
 }
 
 SCHEMA_V1 = (
@@ -90,6 +91,37 @@ SCHEMA_V2 = (
     "title, heading, raw_content, tags, cjk_text, tokenize='unicode61')"
 )
 
+SCHEMA_V3 = (
+    """CREATE TABLE embedding_generations (
+        id TEXT PRIMARY KEY,
+        provider TEXT NOT NULL,
+        model TEXT NOT NULL,
+        model_version TEXT NOT NULL,
+        dimensions INTEGER NOT NULL CHECK(dimensions > 0),
+        created_at TEXT NOT NULL,
+        UNIQUE(provider, model, model_version, dimensions)
+    )""",
+    """CREATE TABLE embedding_cache (
+        cache_key TEXT PRIMARY KEY,
+        generation_id TEXT NOT NULL REFERENCES embedding_generations(id) ON DELETE CASCADE,
+        embedding_text_hash TEXT NOT NULL,
+        vector BLOB NOT NULL,
+        token_count INTEGER NOT NULL,
+        created_at TEXT NOT NULL
+    )""",
+    """CREATE TABLE chunk_embeddings (
+        generation_id TEXT NOT NULL REFERENCES embedding_generations(id) ON DELETE CASCADE,
+        chunk_id TEXT NOT NULL REFERENCES chunks(id) ON DELETE CASCADE,
+        embedding_text_hash TEXT NOT NULL,
+        cache_key TEXT NOT NULL REFERENCES embedding_cache(cache_key),
+        vec_rowid INTEGER NOT NULL,
+        PRIMARY KEY(generation_id, chunk_id),
+        UNIQUE(generation_id, vec_rowid)
+    )""",
+    "CREATE INDEX idx_cache_generation_hash ON embedding_cache(generation_id, embedding_text_hash)",
+    "CREATE INDEX idx_chunk_embeddings_chunk ON chunk_embeddings(chunk_id)",
+)
+
 
 def _tables(connection: sqlite3.Connection) -> set[str]:
     return {
@@ -112,19 +144,38 @@ def _migrate_v2(connection: sqlite3.Connection) -> None:
         raise
 
 
+def _migrate_v3(connection: sqlite3.Connection) -> None:
+    connection.execute("BEGIN IMMEDIATE")
+    try:
+        for statement in SCHEMA_V3:
+            connection.execute(statement)
+        connection.execute("PRAGMA user_version = 3")
+        connection.execute("COMMIT")
+    except Exception:
+        connection.execute("ROLLBACK")
+        raise
+
+
 def initialize_schema(connection: sqlite3.Connection) -> None:
     version = connection.execute("PRAGMA user_version").fetchone()[0]
     if version == SCHEMA_VERSION:
         if missing := REQUIRED_TABLES - _tables(connection):
             raise SchemaError(f"SQLite schema is incomplete: {', '.join(sorted(missing))}")
         return
-    if version not in (0, 1):
+    if version not in (0, 1, 2):
         raise SchemaError(f"Unsupported SQLite schema version: {version}")
 
+    if version == 2:
+        if missing := (REQUIRED_TABLES - {"embedding_generations", "embedding_cache", "chunk_embeddings"}) - _tables(connection):
+            raise SchemaError(f"SQLite schema is incomplete: {', '.join(sorted(missing))}")
+        _migrate_v3(connection)
+        return
+
     if version == 1:
-        if missing := (REQUIRED_TABLES - {"chunk_fts"}) - _tables(connection):
+        if missing := (REQUIRED_TABLES - {"chunk_fts", "embedding_generations", "embedding_cache", "chunk_embeddings"}) - _tables(connection):
             raise SchemaError(f"SQLite schema is incomplete: {', '.join(sorted(missing))}")
         _migrate_v2(connection)
+        _migrate_v3(connection)
         return
 
     existing = connection.execute(
@@ -143,3 +194,4 @@ def initialize_schema(connection: sqlite3.Connection) -> None:
         connection.execute("ROLLBACK")
         raise
     _migrate_v2(connection)
+    _migrate_v3(connection)

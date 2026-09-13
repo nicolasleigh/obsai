@@ -2,6 +2,7 @@
 
 import json
 import logging
+import asyncio
 from pathlib import Path
 from typing import Annotated
 
@@ -19,6 +20,23 @@ app.add_typer(index_app, name="index")
 console = Console()
 error_console = Console(stderr=True)
 logger = logging.getLogger(__name__)
+
+
+def _embedding_pipeline(database):
+    from obsai.embedding.models import EmbeddingGeneration
+    from obsai.embedding.openai_provider import OpenAIEmbeddingProvider
+    from obsai.embedding.pipeline import EmbeddingPipeline
+    from obsai.storage.vectors import SQLiteVectorStore
+
+    settings = load_settings()
+    config = settings.embedding
+    generation = EmbeddingGeneration(
+        config.provider, config.model, config.model_version or config.model,
+        config.dimensions,
+    )
+    provider = OpenAIEmbeddingProvider(generation, config.timeout_seconds)
+    store = SQLiteVectorStore(database)
+    return store, EmbeddingPipeline(store, provider, config)
 
 
 def version_callback(value: bool) -> None:
@@ -82,21 +100,11 @@ def index_update() -> None:
                 console.print(f"  {link.source_path}: [[{link.target_path or ''}]]")
 
 
-@app.command()
-def search(
-    query: Annotated[str, typer.Argument(help="Keyword or phrase to search.")],
-    mode: Annotated[str, typer.Option("--mode", help="Search mode (keyword).")] = "keyword",
-    limit: Annotated[int, typer.Option("--limit", min=1, help="Maximum results.")] = 10,
-    tag: Annotated[list[str] | None, typer.Option("--tag", help="Require a tag; repeatable.")] = None,
-    folder: Annotated[str | None, typer.Option("--folder", help="Vault folder prefix.")] = None,
-    json_output: Annotated[bool, typer.Option("--json", help="Print structured JSON.")] = False,
-) -> None:
-    """Search the local SQLite keyword index."""
-    from obsai.retrieval import FTSRetriever, SearchFilters
+@index_app.command("embeddings")
+def index_embeddings() -> None:
+    """Preflight and populate a generation-isolated local vector index."""
     from obsai.storage import Database
 
-    if mode != "keyword":
-        raise typer.BadParameter("Only keyword mode is available", param_hint="--mode")
     settings = load_settings()
     database_path = (
         settings.index.database or Path.home() / ".obsai" / "index.db"
@@ -104,9 +112,60 @@ def search(
     if not database_path.is_file():
         raise ConfigError("Index does not exist; run 'obsai index update' first")
     with Database(database_path) as database:
-        results = FTSRetriever(database).search(
-            query, limit=limit, filters=SearchFilters(tags=tuple(tag or ()), folder=folder)
-        )
+        _, pipeline = _embedding_pipeline(database)
+        plan = pipeline.plan()
+        console.print(f"Chunks requiring embeddings: {plan.chunks_requiring_embeddings}")
+        console.print(f"Cache hits: {plan.cache_hits}")
+        console.print(f"Estimated tokens: {plan.estimated_tokens}")
+        console.print(f"Estimated requests: {plan.request_count}")
+        console.print(f"Estimated cost: ${plan.estimated_cost_usd:.6f}")
+        if plan.request_count and not typer.confirm("Proceed with remote embeddings?", default=False):
+            raise typer.Exit(1)
+        attached = asyncio.run(pipeline.execute(plan, approved=bool(plan.request_count)))
+        console.print(f"Vectors attached: {attached}")
+
+
+@app.command()
+def search(
+    query: Annotated[str, typer.Argument(help="Keyword or phrase to search.")],
+    mode: Annotated[str, typer.Option("--mode", help="Search mode: keyword or semantic.")] = "keyword",
+    limit: Annotated[int, typer.Option("--limit", min=1, help="Maximum results.")] = 10,
+    tag: Annotated[list[str] | None, typer.Option("--tag", help="Require a tag; repeatable.")] = None,
+    folder: Annotated[str | None, typer.Option("--folder", help="Vault folder prefix.")] = None,
+    json_output: Annotated[bool, typer.Option("--json", help="Print structured JSON.")] = False,
+) -> None:
+    """Search the local keyword or semantic index."""
+    from obsai.retrieval import FTSRetriever, SearchFilters, VectorRetriever
+    from obsai.storage import Database
+
+    if mode not in ("keyword", "semantic"):
+        raise typer.BadParameter("Use keyword or semantic", param_hint="--mode")
+    settings = load_settings()
+    database_path = (
+        settings.index.database or Path.home() / ".obsai" / "index.db"
+    ).expanduser()
+    if not database_path.is_file():
+        raise ConfigError("Index does not exist; run 'obsai index update' first")
+    with Database(database_path) as database:
+        filters = SearchFilters(tags=tuple(tag or ()), folder=folder)
+        if mode == "keyword":
+            results = FTSRetriever(database).search(query, limit=limit, filters=filters)
+        else:
+            store, pipeline = _embedding_pipeline(database)
+            if not store.has_generation(pipeline.generation):
+                raise ConfigError("No vector generation; run 'obsai index embeddings' first")
+            if not query.strip():
+                results = []
+            else:
+                tokens = pipeline.count_tokens(query)
+                pipeline._check_budget(tokens, 1)
+                error_console.print(f"Query embedding tokens: {tokens}")
+                error_console.print(f"Estimated cost: ${tokens * pipeline.price / 1_000_000:.6f}")
+                if not typer.confirm("Send search query for remote embedding?", default=False, err=True):
+                    raise typer.Exit(1)
+                results = VectorRetriever(store, pipeline, approved=True).search(
+                    query, limit=limit, filters=filters
+                )
     if json_output:
         typer.echo(json.dumps([result.model_dump() for result in results], ensure_ascii=False, indent=2))
     else:

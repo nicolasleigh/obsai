@@ -19,3 +19,19 @@ class ParseError(ObsAIError):
 
 class SchemaError(ObsAIError):
     """SQLite schema is missing or incompatible."""
+
+
+class EmbeddingError(ObsAIError):
+    """Embedding generation, storage, or retrieval failed."""
+
+
+class EmbeddingBudgetError(EmbeddingError):
+    """The preflight or live request budget would be exceeded."""
+
+
+class EmbeddingRateLimitError(EmbeddingError):
+    """A provider temporarily rejected a request for rate limiting."""
+
+
+class EmbeddingServiceError(EmbeddingError):
+    """A provider temporarily failed with a server error."""

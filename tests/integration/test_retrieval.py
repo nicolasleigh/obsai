@@ -116,7 +116,7 @@ def test_v1_migration_backfills_existing_chunks(tmp_path: Path) -> None:
     connection.commit()
     connection.close()
     with Database(path) as db:
-        assert db.connection.execute("PRAGMA user_version").fetchone()[0] == 2
+        assert db.connection.execute("PRAGMA user_version").fetchone()[0] == 3
         result = FTSRetriever(db).search("context.WithTimeout", filters=SearchFilters(tags=("archive",)))
         assert [(r.note_id, r.chunk_id) for r in result] == [("n1", "c1")]
     with Database(path) as db:

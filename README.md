@@ -11,6 +11,8 @@ uv run obsai --version
 uv run obsai status
 uv run obsai index update
 uv run obsai search "context.WithTimeout" --mode keyword
+uv run obsai index embeddings
+uv run obsai search "服务怎么平滑退出？" --mode semantic
 uv run pytest
 ```
 
@@ -85,8 +87,9 @@ with Database(Path("/path/to/index.db")) as db:
 
 The first insert assigns a UUID-based note ID. Calling `update_path` with that
 ID preserves it and the existing chunk IDs; later reindexing can pass
-`note_id=note_id` to `index_note`. The schema uses `PRAGMA user_version = 2` and enables foreign keys on
-every connection. Version 1 databases migrate automatically and backfill FTS5 rows.
+`note_id=note_id` to `index_note`. The schema uses `PRAGMA user_version = 3` and enables foreign keys on
+every connection. Version 1 and 2 databases migrate automatically; version 1
+databases also backfill FTS5 rows.
 `IndexRepository.clear()` removes derived rows for a rebuild.
 `created_at`, `modified_at`, and `indexed_at` are index timestamps in UTC, not
 filesystem birth or modification times. All database writes stay inside the
@@ -125,3 +128,44 @@ deletes, and rollbacks keep FTS rows in the same transaction. This phase does
 not use an LLM or semantic search. The test suite includes a small synthetic
 P95 smoke benchmark; the 10k-note/100k-chunk target still needs profiling at
 that scale.
+
+## Semantic retrieval
+
+First run `obsai index update`, then `obsai index embeddings`. The embedding
+command prints the number of unique texts requiring remote generation, cache
+reuse, conservative token upper bound, request count, and estimated cost. It
+requires an interactive confirmation before sending text to OpenAI. Set
+`OPENAI_API_KEY` in the environment for approved calls. Tests use a mock provider
+and never send real notes or queries to OpenAI. Semantic search also asks before
+sending its query for embedding. There is no automatic local-provider fallback.
+
+The optional config fields are:
+
+```toml
+[embedding]
+provider = "openai"
+model = "text-embedding-3-small"
+model_version = "text-embedding-3-small"
+dimensions = 1536
+batch_size = 64
+max_concurrency = 2
+max_input_tokens = 8192
+max_request_tokens = 300000
+timeout_seconds = 30
+max_attempts = 4
+max_embedding_tokens = 1000000
+estimated_cost_limit_usd = 1.0
+max_embedding_requests = 1000
+# price_per_million_tokens_usd = 0.02
+```
+
+The default price estimate for `text-embedding-3-small` is $0.02 per million
+input tokens, based on [official OpenAI model pricing](https://developers.openai.com/api/docs/models/text-embedding-3-small).
+Override it when provider pricing changes. The token estimate uses UTF-8 byte
+length as a conservative upper bound: it can overestimate both provider tokens
+and cost, but cannot silently undercount per-input or per-request limits.
+Provider, model, model version, dimensions, and text hash define the cache key.
+Each generation has a separate sqlite-vec `vec0` table. Updating
+`model_version` is necessary if an upstream model alias changes its embedding
+space. Pure Vault renames retain the existing vector mapping; changed chunks
+can reuse previously cached embeddings when their embedding text hash matches.

@@ -11,6 +11,7 @@ from uuid import uuid4
 from obsai.chunking.models import Chunk
 from obsai.storage.database import Database
 from obsai.storage.fts import delete_fts_for_note, refresh_fts_for_note
+from obsai.storage.vectors import SQLiteVectorStore, delete_vectors_for_note
 from obsai.vault.models import Block, ParsedNote
 
 
@@ -151,6 +152,7 @@ class NoteRepository:
     def delete(self, note_id: str) -> None:
         """Delete the note and all source-derived child rows via FK cascades."""
         with self.db.transaction() as connection:
+            delete_vectors_for_note(connection, note_id)
             delete_fts_for_note(connection, note_id)
             connection.execute("DELETE FROM notes WHERE id = ?", (note_id,))
 
@@ -170,6 +172,7 @@ class ChunkRepository:
             row = connection.execute("SELECT path FROM notes WHERE id = ?", (note_id,)).fetchone()
             if row is None:
                 raise KeyError(f"Unknown note ID: {note_id}")
+            delete_vectors_for_note(connection, note_id)
             delete_fts_for_note(connection, note_id)
             connection.execute("DELETE FROM chunks WHERE note_id = ?", (note_id,))
             for chunk in ordered:
@@ -465,6 +468,7 @@ class IndexRepository:
         """Drop all derived data while retaining the initialized schema."""
         with self.db.transaction() as connection:
             connection.execute("DELETE FROM dirty_notes")
+            SQLiteVectorStore(self.db).clear_vectors()
             connection.execute("DELETE FROM chunk_fts")
             connection.execute("DELETE FROM notes")
             connection.execute("DELETE FROM index_state")

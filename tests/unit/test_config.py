@@ -11,6 +11,9 @@ def test_defaults_do_not_create_config(tmp_path: Path) -> None:
     settings = load_settings()
     assert settings.vault.path is None
     assert settings.index.database is None
+    assert settings.embedding.provider == "openai"
+    assert settings.embedding.model == "text-embedding-3-small"
+    assert settings.embedding.batch_size == 64
     assert not (tmp_path / "config").exists()
 
 
@@ -53,3 +56,18 @@ def test_environment_overrides_file_field(monkeypatch: pytest.MonkeyPatch, tmp_p
 def test_home_fallback_uses_isolated_home(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.delenv("XDG_CONFIG_HOME")
     assert default_config_path() == tmp_path / ".config" / "obsai" / "config.toml"
+
+
+def test_embedding_config_and_budget_validation(tmp_path: Path) -> None:
+    config = tmp_path / "config.toml"
+    config.write_text(
+        '[embedding]\nmodel_version = "revision-2"\n'
+        'batch_size = 8\nmax_embedding_tokens = 1000\n', encoding="utf-8"
+    )
+    settings = load_settings(config)
+    assert settings.embedding.model_version == "revision-2"
+    assert settings.embedding.batch_size == 8
+    assert settings.embedding.max_embedding_tokens == 1000
+    config.write_text('[embedding]\nbatch_size = 0\n', encoding="utf-8")
+    with pytest.raises(ConfigError, match="Invalid configuration"):
+        load_settings(config)

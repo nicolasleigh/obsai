@@ -22,7 +22,7 @@ def sample_note(path: str = "Source.md", extra: str = ""):
 def test_schema_initialization_and_foreign_keys(tmp_path: Path) -> None:
     path = tmp_path / "index.db"
     with Database(path) as db:
-        assert db.connection.execute("PRAGMA user_version").fetchone()[0] == 2
+        assert db.connection.execute("PRAGMA user_version").fetchone()[0] == 3
         assert db.connection.execute("PRAGMA foreign_keys").fetchone()[0] == 1
         tables = {
             row[0]
@@ -30,9 +30,9 @@ def test_schema_initialization_and_foreign_keys(tmp_path: Path) -> None:
                 "SELECT name FROM sqlite_master WHERE type = 'table'"
             )
         }
-        assert {"notes", "chunks", "tags", "links", "blocks", "index_state", "dirty_notes", "chunk_fts"} <= tables
+        assert {"notes", "chunks", "tags", "links", "blocks", "index_state", "dirty_notes", "chunk_fts", "embedding_generations", "embedding_cache", "chunk_embeddings"} <= tables
     with Database(path) as db:
-        assert db.connection.execute("PRAGMA user_version").fetchone()[0] == 2
+        assert db.connection.execute("PRAGMA user_version").fetchone()[0] == 3
 
 
 def test_full_parsed_note_and_chunks_roundtrip(tmp_path: Path) -> None:

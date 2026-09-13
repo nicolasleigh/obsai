@@ -5,6 +5,8 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Iterator
 
+import sqlite_vec
+
 from obsai.errors import SchemaError
 from obsai.storage.schema import initialize_schema
 
@@ -14,6 +16,13 @@ class Database:
         self.path = Path(path) if path != ":memory:" else path
         self.connection = sqlite3.connect(path, isolation_level=None)
         self.connection.row_factory = sqlite3.Row
+        try:
+            self.connection.enable_load_extension(True)
+            sqlite_vec.load(self.connection)
+            self.connection.enable_load_extension(False)
+        except (AttributeError, sqlite3.Error, OSError) as exc:
+            self.connection.close()
+            raise SchemaError(f"sqlite-vec extension is unavailable: {exc}") from exc
         self.connection.execute("PRAGMA foreign_keys = ON")
         if self.connection.execute("PRAGMA foreign_keys").fetchone()[0] != 1:
             self.connection.close()

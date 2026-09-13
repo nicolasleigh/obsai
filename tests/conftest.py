@@ -1,5 +1,7 @@
 """Keep all CLI tests away from the user's configuration directory."""
 
+import os
+
 import pytest
 
 
@@ -7,5 +9,6 @@ import pytest
 def isolated_user_environment(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
-    for name in ("OBSAI_VAULT", "OBSAI_INDEX", "OBSAI_VAULT__PATH", "OBSAI_INDEX__DATABASE"):
-        monkeypatch.delenv(name, raising=False)
+    for name in list(os.environ):
+        if name.startswith("OBSAI_"):
+            monkeypatch.delenv(name, raising=False)
