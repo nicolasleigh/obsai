@@ -10,6 +10,7 @@ from uuid import uuid4
 
 from obsai.chunking.models import Chunk
 from obsai.storage.database import Database
+from obsai.storage.fts import delete_fts_for_note, refresh_fts_for_note
 from obsai.vault.models import Block, ParsedNote
 
 
@@ -150,6 +151,7 @@ class NoteRepository:
     def delete(self, note_id: str) -> None:
         """Delete the note and all source-derived child rows via FK cascades."""
         with self.db.transaction() as connection:
+            delete_fts_for_note(connection, note_id)
             connection.execute("DELETE FROM notes WHERE id = ?", (note_id,))
 
 
@@ -157,7 +159,9 @@ class ChunkRepository:
     def __init__(self, database: Database):
         self.db = database
 
-    def replace_for_note(self, note_id: str, chunks: list[Chunk]) -> None:
+    def replace_for_note(
+        self, note_id: str, chunks: list[Chunk], *, refresh_fts: bool = True
+    ) -> None:
         """Replace a note's chunks atomically, binding provisional IDs to the stable note ID."""
         ordered = sorted(chunks, key=lambda chunk: chunk.position)
         if [chunk.position for chunk in ordered] != list(range(len(ordered))):
@@ -166,6 +170,7 @@ class ChunkRepository:
             row = connection.execute("SELECT path FROM notes WHERE id = ?", (note_id,)).fetchone()
             if row is None:
                 raise KeyError(f"Unknown note ID: {note_id}")
+            delete_fts_for_note(connection, note_id)
             connection.execute("DELETE FROM chunks WHERE note_id = ?", (note_id,))
             for chunk in ordered:
                 if chunk.metadata.get("path") != row["path"]:
@@ -195,6 +200,8 @@ class ChunkRepository:
                         _json(metadata),
                     ),
                 )
+            if refresh_fts:
+                refresh_fts_for_note(connection, note_id)
 
     def list_for_note(self, note_id: str) -> list[Chunk]:
         rows = self.db.connection.execute(
@@ -280,12 +287,13 @@ class IndexRepository:
                     ),
                 )
 
-            self.chunks.replace_for_note(stable_id, chunks)
+            self.chunks.replace_for_note(stable_id, chunks, refresh_fts=False)
             connection.execute("DELETE FROM tags WHERE note_id = ?", (stable_id,))
             connection.executemany(
                 "INSERT INTO tags (note_id, tag) VALUES (?, ?)",
                 [(stable_id, tag) for tag in dict.fromkeys(note.tags)],
             )
+            refresh_fts_for_note(connection, stable_id)
             connection.execute("DELETE FROM blocks WHERE note_id = ?", (stable_id,))
             connection.executemany(
                 """INSERT INTO blocks (
@@ -457,5 +465,6 @@ class IndexRepository:
         """Drop all derived data while retaining the initialized schema."""
         with self.db.transaction() as connection:
             connection.execute("DELETE FROM dirty_notes")
+            connection.execute("DELETE FROM chunk_fts")
             connection.execute("DELETE FROM notes")
             connection.execute("DELETE FROM index_state")

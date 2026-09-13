@@ -10,6 +10,7 @@ uv run obsai --help
 uv run obsai --version
 uv run obsai status
 uv run obsai index update
+uv run obsai search "context.WithTimeout" --mode keyword
 uv run pytest
 ```
 
@@ -84,8 +85,9 @@ with Database(Path("/path/to/index.db")) as db:
 
 The first insert assigns a UUID-based note ID. Calling `update_path` with that
 ID preserves it and the existing chunk IDs; later reindexing can pass
-`note_id=note_id` to `index_note`. The schema uses `PRAGMA user_version = 1` and enables foreign keys on
-every connection. `IndexRepository.clear()` removes derived rows for a rebuild.
+`note_id=note_id` to `index_note`. The schema uses `PRAGMA user_version = 2` and enables foreign keys on
+every connection. Version 1 databases migrate automatically and backfill FTS5 rows.
+`IndexRepository.clear()` removes derived rows for a rebuild.
 `created_at`, `modified_at`, and `indexed_at` are index timestamps in UTC, not
 filesystem birth or modification times. All database writes stay inside the
 repository layer; the Vault remains the source of truth.
@@ -104,3 +106,22 @@ watcher events or `.obsidian/workspace.json` as a source of truth. A note whose
 title came only from its old filename retains that indexed title after a pure
 rename so its embedding text stays stable; its title is recomputed when the
 content is later reindexed.
+
+## Keyword retrieval
+
+```bash
+uv run obsai search "graceful shutdown" --mode keyword --limit 10
+uv run obsai search "context.WithTimeout" --tag go --folder Backend --json
+```
+
+Search uses local SQLite FTS5 over note title, heading breadcrumb, chunk body,
+and tags. Vault paths are used for folder filtering and returned as metadata;
+they are not indexed as body text. Queries are escaped as literal phrases, so
+FTS syntax in a query is never executed. Repeated `--tag` options require all
+tags. Han characters are additionally indexed as individual tokens to support
+Chinese substring phrases. Results contain chunk and note IDs, path, title,
+heading path, snippet, score, and `source="keyword"`. Index writes, updates,
+deletes, and rollbacks keep FTS rows in the same transaction. This phase does
+not use an LLM or semantic search. The test suite includes a small synthetic
+P95 smoke benchmark; the 10k-note/100k-chunk target still needs profiling at
+that scale.

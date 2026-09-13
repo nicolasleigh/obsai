@@ -3,10 +3,11 @@
 import sqlite3
 
 from obsai.errors import SchemaError
+from obsai.storage.fts import refresh_fts_for_note
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 REQUIRED_TABLES = {
-    "notes", "chunks", "tags", "links", "blocks", "index_state", "dirty_notes"
+    "notes", "chunks", "tags", "links", "blocks", "index_state", "dirty_notes", "chunk_fts"
 }
 
 SCHEMA_V1 = (
@@ -84,21 +85,47 @@ SCHEMA_V1 = (
     "CREATE INDEX idx_blocks_reference ON blocks(note_id, block_id)",
 )
 
+SCHEMA_V2 = (
+    "CREATE VIRTUAL TABLE chunk_fts USING fts5("
+    "title, heading, raw_content, tags, cjk_text, tokenize='unicode61')"
+)
+
+
+def _tables(connection: sqlite3.Connection) -> set[str]:
+    return {
+        row[0] for row in connection.execute(
+            "SELECT name FROM sqlite_master WHERE type = 'table'"
+        )
+    }
+
+
+def _migrate_v2(connection: sqlite3.Connection) -> None:
+    connection.execute("BEGIN IMMEDIATE")
+    try:
+        connection.execute(SCHEMA_V2)
+        for (note_id,) in connection.execute("SELECT id FROM notes"):
+            refresh_fts_for_note(connection, note_id)
+        connection.execute("PRAGMA user_version = 2")
+        connection.execute("COMMIT")
+    except Exception:
+        connection.execute("ROLLBACK")
+        raise
+
 
 def initialize_schema(connection: sqlite3.Connection) -> None:
     version = connection.execute("PRAGMA user_version").fetchone()[0]
     if version == SCHEMA_VERSION:
-        tables = {
-            row[0]
-            for row in connection.execute(
-                "SELECT name FROM sqlite_master WHERE type = 'table'"
-            )
-        }
-        if missing := REQUIRED_TABLES - tables:
+        if missing := REQUIRED_TABLES - _tables(connection):
             raise SchemaError(f"SQLite schema is incomplete: {', '.join(sorted(missing))}")
         return
-    if version != 0:
+    if version not in (0, 1):
         raise SchemaError(f"Unsupported SQLite schema version: {version}")
+
+    if version == 1:
+        if missing := (REQUIRED_TABLES - {"chunk_fts"}) - _tables(connection):
+            raise SchemaError(f"SQLite schema is incomplete: {', '.join(sorted(missing))}")
+        _migrate_v2(connection)
+        return
 
     existing = connection.execute(
         "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'"
@@ -110,8 +137,9 @@ def initialize_schema(connection: sqlite3.Connection) -> None:
     try:
         for statement in SCHEMA_V1:
             connection.execute(statement)
-        connection.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
+        connection.execute("PRAGMA user_version = 1")
         connection.execute("COMMIT")
     except Exception:
         connection.execute("ROLLBACK")
         raise
+    _migrate_v2(connection)

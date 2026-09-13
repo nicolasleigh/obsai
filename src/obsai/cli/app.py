@@ -1,5 +1,6 @@
 """Typer entry point and the CLI error boundary."""
 
+import json
 import logging
 from pathlib import Path
 from typing import Annotated
@@ -57,7 +58,9 @@ def index_update() -> None:
     if settings.vault.path is None:
         raise ConfigError("No vault configured; set vault.path in config.toml")
     vault = settings.vault.path.expanduser()
-    database_path = (settings.index.database or Path.home() / ".obsai" / "index.db").expanduser()
+    database_path = (
+        settings.index.database or Path.home() / ".obsai" / "index.db"
+    ).expanduser()
     database_path.parent.mkdir(parents=True, exist_ok=True)
     with Database(database_path) as database:
         result = IncrementalIndexer(IndexRepository(database)).update(vault)
@@ -77,6 +80,41 @@ def index_update() -> None:
             console.print(f"{change.old_path} → {change.path}")
             for link in change.affected_links:
                 console.print(f"  {link.source_path}: [[{link.target_path or ''}]]")
+
+
+@app.command()
+def search(
+    query: Annotated[str, typer.Argument(help="Keyword or phrase to search.")],
+    mode: Annotated[str, typer.Option("--mode", help="Search mode (keyword).")] = "keyword",
+    limit: Annotated[int, typer.Option("--limit", min=1, help="Maximum results.")] = 10,
+    tag: Annotated[list[str] | None, typer.Option("--tag", help="Require a tag; repeatable.")] = None,
+    folder: Annotated[str | None, typer.Option("--folder", help="Vault folder prefix.")] = None,
+    json_output: Annotated[bool, typer.Option("--json", help="Print structured JSON.")] = False,
+) -> None:
+    """Search the local SQLite keyword index."""
+    from obsai.retrieval import FTSRetriever, SearchFilters
+    from obsai.storage import Database
+
+    if mode != "keyword":
+        raise typer.BadParameter("Only keyword mode is available", param_hint="--mode")
+    settings = load_settings()
+    database_path = (
+        settings.index.database or Path.home() / ".obsai" / "index.db"
+    ).expanduser()
+    if not database_path.is_file():
+        raise ConfigError("Index does not exist; run 'obsai index update' first")
+    with Database(database_path) as database:
+        results = FTSRetriever(database).search(
+            query, limit=limit, filters=SearchFilters(tags=tuple(tag or ()), folder=folder)
+        )
+    if json_output:
+        typer.echo(json.dumps([result.model_dump() for result in results], ensure_ascii=False, indent=2))
+    else:
+        for result in results:
+            console.print(f"{result.title}  [{result.path}]", markup=False)
+            if result.heading_path:
+                console.print(" > ".join(result.heading_path))
+            console.print(result.snippet, markup=False)
 
 
 def main() -> None:
