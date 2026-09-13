@@ -1,0 +1,27 @@
+[project]
+name = "obsai-cli"
+version = "0.1.0"
+description = "Local-first Obsidian AI agent CLI"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "typer>=0.12,<1",
+    "rich>=13,<15",
+    "pydantic-settings>=2,<3",
+]
+
+[project.scripts]
+obsai = "obsai.cli.app:main"
+
+[dependency-groups]
+dev = ["pytest>=8,<10"]
+
+[build-system]
+requires = ["hatchling>=1.27,<2"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/obsai"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
