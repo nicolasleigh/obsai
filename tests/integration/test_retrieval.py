@@ -145,7 +145,7 @@ def test_search_cli_keyword_filters_json_and_no_real_home(tmp_path: Path) -> Non
     assert payload[0]["path"] == "Go/context.md"
     assert payload[0]["source"] == "keyword"
     assert "Context" in runner.invoke(app, ["search", "context.WithTimeout"]).output
-    assert json.loads(runner.invoke(app, ["search", "context.WithTimeout", "--tag", "missing", "--json"]).output) == []
+    assert json.loads(runner.invoke(app, ["search", "context.WithTimeout", "--mode", "keyword", "--tag", "missing", "--json"]).output) == []
     assert runner.invoke(app, ["search", "x", "--mode", "semantic"]).exit_code != 0
 
 

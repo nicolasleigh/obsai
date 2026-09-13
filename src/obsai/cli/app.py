@@ -3,11 +3,13 @@
 import json
 import logging
 import asyncio
+from datetime import datetime
 from pathlib import Path
 from typing import Annotated
 
 import typer
 from rich.console import Console
+from pydantic import ValidationError
 
 from obsai import __version__
 from obsai.config.loader import load_settings
@@ -37,6 +39,32 @@ def _embedding_pipeline(database):
     provider = OpenAIEmbeddingProvider(generation, config.timeout_seconds)
     store = SQLiteVectorStore(database)
     return store, EmbeddingPipeline(store, provider, config)
+
+
+def _key_value_filters(values: list[str] | None, *, json_value: bool) -> dict:
+    parsed = {}
+    for item in values or []:
+        key, separator, value = item.partition("=")
+        if not separator or not key.strip():
+            raise typer.BadParameter("Expected key=value")
+        if json_value:
+            try:
+                value = json.loads(value)
+            except json.JSONDecodeError:
+                pass
+            if isinstance(value, (dict, list)):
+                raise typer.BadParameter("Only scalar metadata values are supported")
+        parsed[key.strip()] = value
+    return parsed
+
+
+def _modified_filter(value: str | None) -> datetime | None:
+    if value is None:
+        return None
+    try:
+        return datetime.fromisoformat(value)
+    except ValueError as exc:
+        raise typer.BadParameter("Use an ISO-8601 date or datetime") from exc
 
 
 def version_callback(value: bool) -> None:
@@ -127,19 +155,24 @@ def index_embeddings() -> None:
 
 @app.command()
 def search(
-    query: Annotated[str, typer.Argument(help="Keyword or phrase to search.")],
-    mode: Annotated[str, typer.Option("--mode", help="Search mode: keyword or semantic.")] = "keyword",
+    query: Annotated[str, typer.Argument(help="Search text or natural-language question.")],
+    mode: Annotated[str, typer.Option("--mode", help="Search mode: hybrid, keyword, or semantic.")] = "hybrid",
     limit: Annotated[int, typer.Option("--limit", min=1, help="Maximum results.")] = 10,
     tag: Annotated[list[str] | None, typer.Option("--tag", help="Require a tag; repeatable.")] = None,
     folder: Annotated[str | None, typer.Option("--folder", help="Vault folder prefix.")] = None,
+    modified_after: Annotated[str | None, typer.Option("--modified-after", help="Modified at or after ISO-8601 time.")] = None,
+    modified_before: Annotated[str | None, typer.Option("--modified-before", help="Modified at or before ISO-8601 time.")] = None,
+    frontmatter: Annotated[list[str] | None, typer.Option("--frontmatter", help="Top-level scalar key=value; repeatable.")] = None,
+    dataview: Annotated[list[str] | None, typer.Option("--dataview", help="Inline field key=value; repeatable.")] = None,
+    strict_semantic: Annotated[bool, typer.Option("--strict-semantic", help="Fail if semantic retrieval is unavailable.")] = False,
     json_output: Annotated[bool, typer.Option("--json", help="Print structured JSON.")] = False,
 ) -> None:
-    """Search the local keyword or semantic index."""
-    from obsai.retrieval import FTSRetriever, SearchFilters, VectorRetriever
+    """Search the local hybrid, keyword, or semantic index."""
+    from obsai.retrieval import FTSRetriever, HybridRetriever, SearchFilters, VectorRetriever
     from obsai.storage import Database
 
-    if mode not in ("keyword", "semantic"):
-        raise typer.BadParameter("Use keyword or semantic", param_hint="--mode")
+    if mode not in ("hybrid", "keyword", "semantic"):
+        raise typer.BadParameter("Use hybrid, keyword, or semantic", param_hint="--mode")
     settings = load_settings()
     database_path = (
         settings.index.database or Path.home() / ".obsai" / "index.db"
@@ -147,25 +180,53 @@ def search(
     if not database_path.is_file():
         raise ConfigError("Index does not exist; run 'obsai index update' first")
     with Database(database_path) as database:
-        filters = SearchFilters(tags=tuple(tag or ()), folder=folder)
+        try:
+            filters = SearchFilters(
+                tags=tuple(tag or ()), folder=folder,
+                modified_after=_modified_filter(modified_after),
+                modified_before=_modified_filter(modified_before),
+                frontmatter=_key_value_filters(frontmatter, json_value=True),
+                dataview=_key_value_filters(dataview, json_value=False),
+            )
+        except ValidationError as exc:
+            raise typer.BadParameter(f"Invalid metadata filter: {exc}") from exc
         if mode == "keyword":
             results = FTSRetriever(database).search(query, limit=limit, filters=filters)
         else:
-            store, pipeline = _embedding_pipeline(database)
-            if not store.has_generation(pipeline.generation):
-                raise ConfigError("No vector generation; run 'obsai index embeddings' first")
-            if not query.strip():
-                results = []
-            else:
-                tokens = pipeline.count_tokens(query)
-                pipeline._check_budget(tokens, 1)
-                error_console.print(f"Query embedding tokens: {tokens}")
-                error_console.print(f"Estimated cost: ${tokens * pipeline.price / 1_000_000:.6f}")
-                if not typer.confirm("Send search query for remote embedding?", default=False, err=True):
-                    raise typer.Exit(1)
-                results = VectorRetriever(store, pipeline, approved=True).search(
-                    query, limit=limit, filters=filters
+            semantic = None
+            reason = "Semantic index missing; run 'obsai index embeddings'; using keyword results"
+            try:
+                store, pipeline = _embedding_pipeline(database)
+                if store.has_generation(pipeline.generation) and query.strip():
+                    tokens = pipeline.count_tokens(query)
+                    pipeline._check_budget(tokens, 1)
+                    error_console.print(f"Query embedding tokens: {tokens}")
+                    error_console.print(f"Estimated cost: ${tokens * pipeline.price / 1_000_000:.6f}")
+                    if typer.confirm("Send search query for remote embedding?", default=False, err=True):
+                        semantic = VectorRetriever(store, pipeline, approved=True)
+                    else:
+                        reason = "Semantic query was not approved; using keyword results"
+            except Exception as exc:
+                if mode == "semantic" or strict_semantic:
+                    raise
+                reason = (
+                    f"Semantic backend unavailable ({type(exc).__name__}: {exc}); "
+                    "using keyword results"
                 )
+            if mode == "semantic":
+                if semantic is None:
+                    raise ConfigError(reason)
+                results = semantic.search(query, limit=limit, filters=filters)
+            else:
+                hybrid = HybridRetriever(
+                    FTSRetriever(database), semantic,
+                    on_semantic_failure="strict" if strict_semantic else "warn",
+                    semantic_unavailable_reason=reason,
+                )
+                outcome = hybrid.search_with_status(query, limit=limit, filters=filters)
+                results = list(outcome.results)
+                for warning in outcome.warnings:
+                    error_console.print(f"Warning: {warning}")
     if json_output:
         typer.echo(json.dumps([result.model_dump() for result in results], ensure_ascii=False, indent=2))
     else:

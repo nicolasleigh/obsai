@@ -1,0 +1,13 @@
+{
+  "notes": {
+    "Go/shutdown.md": "# Graceful Shutdown\n\nDrain in-flight requests before closing the server.\n",
+    "Go/context.md": "# Context Timeout\n\nUse context.WithTimeout to bound the operation.\n",
+    "DB/wal.md": "# SQLite WAL\n\nWrite-ahead logging permits readers during writes.\n"
+  },
+  "cases": [
+    {"query": "graceful shutdown", "expected_paths": ["Go/shutdown.md"]},
+    {"query": "服务怎么平滑退出？", "expected_paths": ["Go/shutdown.md"]},
+    {"query": "context.WithTimeout", "expected_paths": ["Go/context.md"]},
+    {"query": "SQLite WAL", "expected_paths": ["DB/wal.md"]}
+  ]
+}

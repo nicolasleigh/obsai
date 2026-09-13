@@ -3,6 +3,7 @@
 import json
 
 from obsai.retrieval.models import SearchFilters, SearchResult
+from obsai.retrieval.filters import metadata_conditions
 from obsai.storage import Database
 from obsai.storage.fts import cjk_text
 
@@ -34,18 +35,9 @@ class FTSRetriever:
 
         where = ["chunk_fts MATCH ?"]
         params: list[object] = [match]
-        if filters is not None:
-            for tag in filters.tags:
-                where.append(
-                    "EXISTS (SELECT 1 FROM tags WHERE tags.note_id = notes.id AND tags.tag = ?)"
-                )
-                params.append(tag.lstrip("#"))
-            if filters.folder is not None:
-                folder = filters.folder.strip("/")
-                if folder:
-                    prefix = folder + "/"
-                    where.append("substr(notes.path, 1, length(?)) = ?")
-                    params.extend((prefix, prefix))
+        metadata_where, metadata_params = metadata_conditions(filters)
+        where.extend(metadata_where)
+        params.extend(metadata_params)
 
         rows = self.db.connection.execute(
             """SELECT chunks.id AS chunk_id, notes.id AS note_id, notes.path, notes.title,

@@ -275,7 +275,7 @@ def test_cli_preflight_consent_and_semantic_json(tmp_path: Path, monkeypatch: py
     config_path.parent.mkdir(parents=True)
     config_path.write_text(
         f'[vault]\npath = "{vault}"\n[index]\ndatabase = "{db_path}"\n'
-        '[embedding]\ndimensions = 3\n', encoding="utf-8"
+        '[embedding]\ndimensions = 3\nmax_attempts = 1\n', encoding="utf-8"
     )
     runner = CliRunner()
     assert runner.invoke(app, ["index", "update"]).exit_code == 0
@@ -295,6 +295,25 @@ def test_cli_preflight_consent_and_semantic_json(tmp_path: Path, monkeypatch: py
     assert found.exit_code == 0, found.output
     assert json.loads(found.stdout[found.stdout.index("["):])[0]["title"] == "Graceful Shutdown"
     assert len(calls) == 2
+    combined = runner.invoke(app, ["search", "Graceful Shutdown", "--json"], input="y\n")
+    assert combined.exit_code == 0, combined.output
+    merged = json.loads(combined.stdout[combined.stdout.index("["):])
+    assert merged[0]["source"] == "hybrid"
+    assert merged[0]["sources"] == ["keyword", "semantic"]
+    declined_query = runner.invoke(app, ["search", "Graceful Shutdown", "--json"], input="\n")
+    assert declined_query.exit_code == 0
+    assert "not approved" in declined_query.stderr
+    assert json.loads(declined_query.stdout[declined_query.stdout.index("["):])[0]["sources"] == ["keyword"]
+    async def fail_embed(self, texts: list[str]) -> list[list[float]]:
+        raise EmbeddingServiceError("provider unavailable")
+
+    monkeypatch.setattr(OpenAIEmbeddingProvider, "embed", fail_embed)
+    failed = runner.invoke(app, ["search", "Graceful Shutdown", "--json"], input="y\n")
+    assert failed.exit_code == 0, failed.output
+    assert "provider unavailable" in failed.stderr
+    assert json.loads(failed.stdout[failed.stdout.index("["):])[0]["sources"] == ["keyword"]
+    strict = runner.invoke(app, ["search", "Graceful Shutdown", "--strict-semantic"], input="y\n")
+    assert strict.exit_code != 0
 
 
 def test_v2_database_migrates_without_losing_fts(tmp_path: Path) -> None:

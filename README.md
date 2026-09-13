@@ -114,7 +114,7 @@ content is later reindexed.
 
 ```bash
 uv run obsai search "graceful shutdown" --mode keyword --limit 10
-uv run obsai search "context.WithTimeout" --tag go --folder Backend --json
+uv run obsai search "context.WithTimeout" --mode keyword --tag go --folder Backend --json
 ```
 
 Search uses local SQLite FTS5 over note title, heading breadcrumb, chunk body,
@@ -169,3 +169,33 @@ Each generation has a separate sqlite-vec `vec0` table. Updating
 `model_version` is necessary if an upstream model alias changes its embedding
 space. Pure Vault renames retain the existing vector mapping; changed chunks
 can reuse previously cached embeddings when their embedding text hash matches.
+
+## Hybrid retrieval
+
+`obsai search "..."` defaults to hybrid retrieval. It requests candidate
+chunks from FTS5 and the current vector generation, then merges ranks with
+Reciprocal Rank Fusion (`k=60`) and returns the top results. `--mode keyword`
+and `--mode semantic` select one path. Hybrid JSON results include `sources`
+to show whether a chunk appeared in keyword search, semantic search, or both.
+`NoOpReranker` keeps the fused order; the `Reranker` interface accepts a later
+reranking implementation without changing retrieval backends.
+
+The shared metadata filters are `--folder`, repeatable `--tag`,
+`--modified-after`, `--modified-before`, repeatable `--frontmatter key=value`,
+and repeatable `--dataview key=value`. Frontmatter filtering supports top-level
+scalar values. `modified` compares the database's content-index timestamp,
+not a filesystem mtime. Dataview fields are compared as stored strings; no
+Dataview query is executed.
+
+Hybrid search visibly falls back to keyword results when there is no vector
+generation, the user declines remote query embedding, or the semantic backend
+fails. The warning goes to stderr and is also available through
+`HybridRetriever.search_with_status().warnings`. Use `--strict-semantic` to
+fail instead of degrading. Semantic-only mode always fails when its backend
+is unavailable. Keyword mode never calls the embedding provider.
+
+The small benchmark dataset at `tests/fixtures/retrieval/benchmark.json`
+contains queries and expected note paths. `obsai.retrieval.evaluation.evaluate`
+calculates macro Recall@K, MRR, and Precision@K. The mock-backed integration
+benchmark checks that hybrid scores do not fall below either single path at
+K=2; it does not measure real OpenAI embedding quality.

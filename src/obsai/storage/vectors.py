@@ -11,6 +11,7 @@ import sqlite_vec
 from obsai.embedding.models import EmbeddingGeneration
 from obsai.errors import EmbeddingError
 from obsai.retrieval.models import SearchFilters, SearchResult
+from obsai.retrieval.filters import metadata_conditions
 from obsai.storage.database import Database
 
 _HEX = re.compile(r"^[0-9a-f]{64}$")
@@ -191,8 +192,8 @@ class SQLiteVectorStore:
         _validate_vector(vector, generation.dimensions)
         table = _table(generation.id)
         # Filtering after KNN needs all candidates to preserve correct top-k.
-        folder = filters.folder.strip("/") if filters and filters.folder else ""
-        filtered = filters is not None and (bool(filters.tags) or bool(folder))
+        filtered = filters.active if filters is not None else False
+        metadata_where, metadata_params = metadata_conditions(filters, notes_alias="n")
         k = (
             self.db.connection.execute(
                 "SELECT COUNT(*) FROM chunk_embeddings WHERE generation_id = ?",
@@ -213,22 +214,12 @@ class SQLiteVectorStore:
                           n.id AS note_id, n.path, n.title
                    FROM chunks AS c JOIN notes AS n ON n.id = c.note_id
                    JOIN chunk_embeddings AS ce ON ce.chunk_id = c.id
-                   WHERE ce.generation_id = ? AND ce.vec_rowid = ?""",
-                (generation.id, candidate["rowid"]),
+                   WHERE ce.generation_id = ? AND ce.vec_rowid = ?"""
+                + (" AND " + " AND ".join(metadata_where) if metadata_where else ""),
+                (generation.id, candidate["rowid"], *metadata_params),
             ).fetchone()
             if row is None:
                 continue
-            if filters is not None:
-                if folder and not row["path"].startswith(folder + "/"):
-                    continue
-                if filters.tags:
-                    tags = {
-                        item[0] for item in self.db.connection.execute(
-                            "SELECT tag FROM tags WHERE note_id = ?", (row["note_id"],)
-                        )
-                    }
-                    if not all(tag.lstrip("#") in tags for tag in filters.tags):
-                        continue
             results.append(SearchResult(
                 chunk_id=row["chunk_id"], note_id=row["note_id"], path=row["path"],
                 title=row["title"], heading_path=json.loads(row["heading_path"]),
