@@ -1,14 +1,15 @@
 # ObsAgent CLI
 
 Local-first Obsidian CLI with Markdown parsing, context-aware chunking, and a
-rebuildable SQLite metadata index. The CLI still exposes only the Phase 0
-commands; the newer layers are available through the Python API.
+rebuildable SQLite metadata index. `obsai index update` synchronizes a configured
+Vault; the underlying layers are also available through the Python API.
 
 ```bash
 uv sync
 uv run obsai --help
 uv run obsai --version
 uv run obsai status
+uv run obsai index update
 uv run pytest
 ```
 
@@ -23,9 +24,11 @@ path = "/path/to/vault"
 database = "/path/to/index.db"
 ```
 
-Both fields are optional in Phase 0. `OBSAI_VAULT__PATH` and
+Both fields are optional in the configuration model. `OBSAI_VAULT__PATH` and
 `OBSAI_INDEX__DATABASE` can provide values when the config file omits them.
-The CLI only reads configuration; it does not create the file or directories.
+The CLI reads but does not create the config file. `index update` requires a
+Vault path and creates the SQLite database at `~/.obsai/index.db` if
+`index.database` is omitted.
 
 ## Read-only vault parsing
 
@@ -81,9 +84,23 @@ with Database(Path("/path/to/index.db")) as db:
 
 The first insert assigns a UUID-based note ID. Calling `update_path` with that
 ID preserves it and the existing chunk IDs; later reindexing can pass
-`note_id=note_id` to `index_note`. Automatic rename detection is not part of
-Phase 3. The schema uses `PRAGMA user_version = 1` and enables foreign keys on
+`note_id=note_id` to `index_note`. The schema uses `PRAGMA user_version = 1` and enables foreign keys on
 every connection. `IndexRepository.clear()` removes derived rows for a rebuild.
 `created_at`, `modified_at`, and `indexed_at` are index timestamps in UTC, not
 filesystem birth or modification times. All database writes stay inside the
 repository layer; the Vault remains the source of truth.
+
+## Incremental update
+
+`obsai index update` hashes each visible, non-ignored Markdown file. Unchanged
+files are not re-parsed or re-chunked. A disappeared indexed path and a new path
+with one unique exact content-hash match are reported as a rename or move;
+their note ID, chunk IDs, and embedding text hashes are retained. Ambiguous
+same-content matches are conservatively treated as deletes and creates.
+Changed files are re-parsed and re-chunked, and deleted files are removed from
+the index with their derived rows. The update reports affected WikiLinks for
+renames and moves but never changes Vault files or backlinks. It does not use
+watcher events or `.obsidian/workspace.json` as a source of truth. A note whose
+title came only from its old filename retains that indexed title after a pure
+rename so its embedding text stays stable; its title is recomputed when the
+content is later reindexed.

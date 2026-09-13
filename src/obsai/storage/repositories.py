@@ -39,6 +39,13 @@ class NoteRecord:
 
 
 @dataclass(frozen=True)
+class IndexedFile:
+    id: str
+    path: str
+    content_hash: str
+
+
+@dataclass(frozen=True)
 class LinkRecord:
     source_note_id: str
     source_block_id: str | None
@@ -57,6 +64,14 @@ class DirtyNote:
     note_id: str | None
     reason: str
     marked_at: str
+
+
+@dataclass(frozen=True)
+class LinkImpact:
+    source_note_id: str
+    source_path: str
+    target_path: str | None
+    position: int
 
 
 def _note_record(row: sqlite3.Row | None) -> NoteRecord | None:
@@ -86,6 +101,18 @@ class NoteRepository:
     def get_by_path(self, path: str) -> NoteRecord | None:
         row = self.db.connection.execute("SELECT * FROM notes WHERE path = ?", (path,)).fetchone()
         return _note_record(row)
+
+    def list_all(self) -> list[NoteRecord]:
+        rows = self.db.connection.execute("SELECT * FROM notes ORDER BY path").fetchall()
+        records = [_note_record(row) for row in rows]
+        return [record for record in records if record is not None]
+
+    def list_index_facts(self) -> list[IndexedFile]:
+        """Read only the fields needed for an incremental Vault comparison."""
+        rows = self.db.connection.execute(
+            "SELECT id, path, content_hash FROM notes ORDER BY path"
+        ).fetchall()
+        return [IndexedFile(**dict(row)) for row in rows]
 
     def get_parsed(self, note_id: str) -> ParsedNote | None:
         row = self.db.connection.execute(
@@ -198,7 +225,12 @@ class IndexRepository:
         self.chunks = ChunkRepository(database)
 
     def index_note(
-        self, note: ParsedNote, chunks: list[Chunk], *, note_id: str | None = None
+        self,
+        note: ParsedNote,
+        chunks: list[Chunk],
+        *,
+        note_id: str | None = None,
+        reconcile: bool = True,
     ) -> str:
         """Store a parsed note and all derived rows as one transaction."""
         with self.db.transaction() as connection:
@@ -295,7 +327,8 @@ class IndexRepository:
                     ),
                 )
             connection.execute("DELETE FROM dirty_notes WHERE path = ?", (note.path,))
-            self.reconcile_links()
+            if reconcile:
+                self.reconcile_links()
             return stable_id
 
     def _target_id(self, source_id: str, source_path: str, target: str | None) -> str | None:
@@ -358,6 +391,19 @@ class IndexRepository:
             for row in rows
         ]
 
+    def backlinks_for_path(self, note_id: str, old_path: str) -> list[LinkImpact]:
+        """Report source WikiLinks that may need review after a path change."""
+        without_suffix = old_path[:-3] if old_path.lower().endswith(".md") else old_path
+        rows = self.db.connection.execute(
+            """SELECT links.source_note_id, notes.path AS source_path,
+                      links.target_path, links.position
+               FROM links JOIN notes ON notes.id = links.source_note_id
+               WHERE links.target_note_id = ? OR links.target_path IN (?, ?)
+               ORDER BY notes.path, links.position""",
+            (note_id, old_path, without_suffix),
+        ).fetchall()
+        return [LinkImpact(**dict(row)) for row in rows]
+
     def blocks_for_note(self, note_id: str) -> list[Block]:
         rows = self.db.connection.execute(
             "SELECT * FROM blocks WHERE note_id = ? ORDER BY position", (note_id,)
@@ -402,6 +448,10 @@ class IndexRepository:
             "SELECT * FROM dirty_notes ORDER BY path"
         ).fetchall()
         return [DirtyNote(**dict(row)) for row in rows]
+
+    def clear_dirty(self, path: str) -> None:
+        with self.db.transaction() as connection:
+            connection.execute("DELETE FROM dirty_notes WHERE path = ?", (path,))
 
     def clear(self) -> None:
         """Drop all derived data while retaining the initialized schema."""

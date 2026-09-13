@@ -5,6 +5,8 @@ from obsai.storage.repositories import (
     ChunkRepository,
     DirtyNote,
     IndexRepository,
+    IndexedFile,
+    LinkImpact,
     LinkRecord,
     NoteRecord,
     NoteRepository,
@@ -12,5 +14,5 @@ from obsai.storage.repositories import (
 
 __all__ = [
     "Database", "NoteRepository", "ChunkRepository", "IndexRepository",
-    "NoteRecord", "LinkRecord", "DirtyNote",
+    "NoteRecord", "IndexedFile", "LinkRecord", "LinkImpact", "DirtyNote",
 ]
