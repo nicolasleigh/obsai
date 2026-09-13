@@ -1,8 +1,8 @@
 # ObsAgent CLI
 
-Local-first Obsidian CLI with read-only Markdown parsing and context-aware
-chunking. The CLI still exposes only the Phase 0 commands; parsing and chunking
-are available through the Python API.
+Local-first Obsidian CLI with Markdown parsing, context-aware chunking, and a
+rebuildable SQLite metadata index. The CLI still exposes only the Phase 0
+commands; the newer layers are available through the Python API.
 
 ```bash
 uv sync
@@ -62,5 +62,28 @@ without injected labels. `embedding_text` adds the title and section breadcrumb,
 but not the filesystem path. The first H1 is omitted from its `Section` label
 when it equals the note title; `heading_path` always retains the full hierarchy.
 `token_count` is a deterministic, model-independent estimate of embedding text
-size. Phase 3 will need a persistent note ID; Phase 2 derives `note_id` from the
-vault-relative path.
+size. Chunks produced here have provisional path-derived IDs; the repository
+rebinds them to a persistent note ID when indexing.
+
+## SQLite metadata index
+
+```python
+from pathlib import Path
+from obsai.storage import Database, IndexRepository
+
+with Database(Path("/path/to/index.db")) as db:
+    index = IndexRepository(db)
+    note_id = index.index_note(notes[0], chunk_note(notes[0]))
+    stored_note = index.notes.get_parsed(note_id)
+    stored_chunks = index.chunks.list_for_note(note_id)
+    index.notes.update_path(note_id, "New/location.md")
+```
+
+The first insert assigns a UUID-based note ID. Calling `update_path` with that
+ID preserves it and the existing chunk IDs; later reindexing can pass
+`note_id=note_id` to `index_note`. Automatic rename detection is not part of
+Phase 3. The schema uses `PRAGMA user_version = 1` and enables foreign keys on
+every connection. `IndexRepository.clear()` removes derived rows for a rebuild.
+`created_at`, `modified_at`, and `indexed_at` are index timestamps in UTC, not
+filesystem birth or modification times. All database writes stay inside the
+repository layer; the Vault remains the source of truth.

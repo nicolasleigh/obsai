@@ -15,3 +15,7 @@ class VaultError(ObsAIError):
 
 class ParseError(ObsAIError):
     """A Markdown note cannot be parsed safely."""
+
+
+class SchemaError(ObsAIError):
+    """SQLite schema is missing or incompatible."""
