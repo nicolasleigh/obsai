@@ -1,0 +1,21 @@
+[
+  {
+    "chunk_id": "b1cd506c04ae703c13cba1a22739a50c7b8d045c404585096dd31a805f4493ea",
+    "note_id": "adc1dcdb4adf1b506a07a19102e877a5c251b3109d3c2e9ecfaccb9722c99131",
+    "heading_path": ["Basic Note"],
+    "block_id": null,
+    "raw_content": "A plain paragraph with #alpha and [site](https://example.org).\n\n- First item\n- Second item",
+    "embedding_text": "Title: Basic Note\n\nA plain paragraph with #alpha and [site](https://example.org).\n\n- First item\n- Second item",
+    "token_count": 30,
+    "content_hash": "1bb5ee110a12f2eccef24b6b46674e5a3e31b0a35905037c8d1eb707ffd78ad2",
+    "embedding_text_hash": "aa7840ecca63683c4b9d36b5aa1350dc7b589aca49a68ff53f57f10117cea2a1",
+    "position": 0,
+    "metadata": {
+      "path": "basic.md",
+      "title": "Basic Note",
+      "source_lines": [3, 6],
+      "block_ids": [],
+      "oversized_atomic": false
+    }
+  }
+]

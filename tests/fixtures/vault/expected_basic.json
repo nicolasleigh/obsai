@@ -6,10 +6,10 @@
   "tags": ["alpha"],
   "headings": [{"level": 1, "text": "Basic Note", "line": 1}],
   "blocks": [
-    {"kind": "heading", "content": "Basic Note", "line": 1, "block_id": null, "language": null},
-    {"kind": "paragraph", "content": "A plain paragraph with #alpha and site.", "line": 3, "block_id": null, "language": null},
-    {"kind": "list_item", "content": "First item", "line": 5, "block_id": null, "language": null},
-    {"kind": "list_item", "content": "Second item", "line": 6, "block_id": null, "language": null}
+    {"kind": "heading", "content": "Basic Note", "line": 1, "end_line": 1, "raw_content": "# Basic Note", "block_id": null, "language": null},
+    {"kind": "paragraph", "content": "A plain paragraph with #alpha and site.", "line": 3, "end_line": 3, "raw_content": "A plain paragraph with #alpha and [site](https://example.org).", "block_id": null, "language": null},
+    {"kind": "list_item", "content": "First item", "line": 5, "end_line": 5, "raw_content": "- First item", "block_id": null, "language": null},
+    {"kind": "list_item", "content": "Second item", "line": 6, "end_line": 6, "raw_content": "- Second item", "block_id": null, "language": null}
   ],
   "wikilinks": [],
   "external_links": [

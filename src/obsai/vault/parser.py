@@ -112,7 +112,13 @@ def _callout(token: Token, body_lines: list[str], offset: int) -> Callout | None
         re.sub(r"^\s{0,3}>\s?", "", line.rstrip("\r\n"))
         for line in body_lines[start + 1 : end]
     ).strip()
-    return Callout(callout_type=match.group("type").lower(), content=content, line=offset + start + 1)
+    return Callout(
+        callout_type=match.group("type").lower(),
+        content=content,
+        line=offset + start + 1,
+        end_line=offset + end,
+        raw_content="".join(body_lines[start:end]).rstrip("\r\n"),
+    )
 
 
 def parse_markdown(raw_content: str, path: str) -> ParsedNote:
@@ -163,17 +169,28 @@ def parse_markdown(raw_content: str, path: str) -> ParsedNote:
         elif token.type == "blockquote_close":
             blockquote_stack.pop()
         elif token.type in {"fence", "code_block"}:
-            line = offset + (token.map[0] if token.map else 0) + 1
+            start, end = token.map or (0, 0)
+            line = offset + start + 1
             code = token.content.rstrip("\n")
             language = token.info.split()[0] if token.info.strip() else None
-            blocks.append(Block(kind="code", content=code, line=line, language=language))
+            blocks.append(
+                Block(
+                    kind="code",
+                    content=code,
+                    line=line,
+                    end_line=offset + end,
+                    raw_content="".join(body_lines[start:end]).rstrip("\r\n"),
+                    language=language,
+                )
+            )
             text_parts.append(code)
         elif token.type == "inline":
             children = token.children or []
-            line = offset + (token.map[0] if token.map else 0) + 1
+            start, end = token.map or (0, 0)
+            line = offset + start + 1
             visible = _visible_text(children)
             semantic = _semantic_text(children)
-            if heading_level is not None:
+            if heading_level is not None and not blockquote_stack:
                 kind = "heading"
                 headings.append(Heading(level=heading_level, text=visible, line=line))
             elif any(blockquote_stack):
@@ -199,7 +216,16 @@ def parse_markdown(raw_content: str, path: str) -> ParsedNote:
                 for inline_field in INLINE_FIELD_RE.finditer(semantic_line):
                     dataview[inline_field.group(1)] = inline_field.group(2).strip()
 
-            blocks.append(Block(kind=kind, content=visible, line=line, block_id=block_id))
+            blocks.append(
+                Block(
+                    kind=kind,
+                    content=visible,
+                    line=line,
+                    end_line=offset + end,
+                    raw_content="".join(body_lines[start:end]).rstrip("\r\n"),
+                    block_id=block_id,
+                )
+            )
             if visible:
                 text_parts.append(visible)
 

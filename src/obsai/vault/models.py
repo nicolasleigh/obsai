@@ -19,6 +19,8 @@ class Block(ParserModel):
     kind: Literal["heading", "paragraph", "list_item", "blockquote", "callout", "code"]
     content: str
     line: int
+    end_line: int
+    raw_content: str
     block_id: str | None = None
     language: str | None = None
 
@@ -43,6 +45,8 @@ class Callout(ParserModel):
     callout_type: str
     content: str
     line: int
+    end_line: int
+    raw_content: str
 
 
 class BlockReference(ParserModel):
