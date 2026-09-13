@@ -1,0 +1,4 @@
+ignored/
+Private/
+Templates/
+*.secret.md

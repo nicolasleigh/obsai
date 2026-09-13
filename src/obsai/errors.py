@@ -7,3 +7,11 @@ class ObsAIError(Exception):
 
 class ConfigError(ObsAIError):
     """Configuration cannot be loaded or validated."""
+
+
+class VaultError(ObsAIError):
+    """Vault cannot be scanned or read."""
+
+
+class ParseError(ObsAIError):
+    """A Markdown note cannot be parsed safely."""

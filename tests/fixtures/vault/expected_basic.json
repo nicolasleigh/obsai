@@ -1,0 +1,22 @@
+{
+  "path": "basic.md",
+  "title": "Basic Note",
+  "frontmatter": {},
+  "dataview_fields": {},
+  "tags": ["alpha"],
+  "headings": [{"level": 1, "text": "Basic Note", "line": 1}],
+  "blocks": [
+    {"kind": "heading", "content": "Basic Note", "line": 1, "block_id": null, "language": null},
+    {"kind": "paragraph", "content": "A plain paragraph with #alpha and site.", "line": 3, "block_id": null, "language": null},
+    {"kind": "list_item", "content": "First item", "line": 5, "block_id": null, "language": null},
+    {"kind": "list_item", "content": "Second item", "line": 6, "block_id": null, "language": null}
+  ],
+  "wikilinks": [],
+  "external_links": [
+    {"url": "https://example.org", "display_text": "site", "is_embed": false, "line": 3}
+  ],
+  "callouts": [],
+  "block_references": [],
+  "raw_content": "# Basic Note\n\nA plain paragraph with #alpha and [site](https://example.org).\n\n- First item\n- Second item\n",
+  "plain_text": "Basic Note\nA plain paragraph with #alpha and site.\nFirst item\nSecond item"
+}
