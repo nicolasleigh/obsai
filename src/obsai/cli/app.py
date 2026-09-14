@@ -20,9 +20,11 @@ app = typer.Typer(help="ObsAgent command-line interface.", no_args_is_help=True)
 index_app = typer.Typer(help="Maintain the local derived index.", no_args_is_help=True)
 note_app = typer.Typer(help="Preview and approve safe single-note Vault changes.", no_args_is_help=True)
 transaction_app = typer.Typer(help="Inspect and recover Vault transactions.", no_args_is_help=True)
+agent_app = typer.Typer(help="Run or resume the bounded agent workflow.", no_args_is_help=True)
 app.add_typer(index_app, name="index")
 app.add_typer(note_app, name="note")
 app.add_typer(transaction_app, name="transaction")
+app.add_typer(agent_app, name="agent")
 console = Console()
 error_console = Console(stderr=True)
 logger = logging.getLogger(__name__)
@@ -319,6 +321,100 @@ def ask(
             if record.block_id:
                 location += f" ^{record.block_id}"
             console.print(f"[{source.citation_id}] {location}", markup=False)
+
+
+def _agent_runtime(query: str):
+    """Open durable workflow state separately from the Vault transaction journal."""
+    import sqlite3
+    from langgraph.checkpoint.sqlite import SqliteSaver
+    from obsai.agent.openai_planner import OpenAIDecisionProvider
+    from obsai.agent.store import ArtifactStore
+    from obsai.agent.tools import AgentTools
+    from obsai.agent.workflow import AgentWorkflow
+    from obsai.answering.context import ContextBuilder
+    from obsai.answering.openai_provider import OpenAILLMProvider
+    from obsai.answering.service import AskService
+    from obsai.retrieval import FTSRetriever, HybridRetriever
+    from obsai.storage import Database, SQLiteEvidenceRepository
+
+    settings = load_settings()
+    if settings.vault.path is None:
+        raise ConfigError("No vault configured; set vault.path in config.toml")
+    database_path = (settings.index.database or Path.home() / ".obsai" / "index.db").expanduser()
+    if not database_path.is_file():
+        raise ConfigError("Index does not exist; run 'obsai index update' first")
+    database = Database(database_path)
+    semantic, reason = _semantic_retriever(database, query)
+    retriever = HybridRetriever(FTSRetriever(database), semantic,
+                                semantic_unavailable_reason=reason)
+    artifacts = ArtifactStore(database_path.with_name("agent-artifacts.db"))
+    checkpoint_connection = sqlite3.connect(database_path.with_name("agent-checkpoints.db"),
+                                            check_same_thread=False)
+    checkpointer = SqliteSaver(checkpoint_connection)
+    checkpointer.setup()
+    answering = AskService(retriever, ContextBuilder(SQLiteEvidenceRepository(database), settings.ask),
+                           OpenAILLMProvider(settings.ask), settings.ask)
+
+    def answer_question(question: str):
+        answer = answering.ask(question)
+        return answer.text, [source.record.note_id for source in answer.sources], [
+            source.record.chunk_id for source in answer.sources]
+
+    workflow = AgentWorkflow(
+        AgentTools(database_path, settings.vault.path, retriever, artifacts),
+        artifacts, OpenAIDecisionProvider(settings.ask), checkpointer=checkpointer,
+        answer_question=answer_question,
+    )
+    return workflow, database, artifacts, checkpoint_connection
+
+
+@agent_app.command("run")
+def agent_run(
+    query: Annotated[str, typer.Argument(help="Request for the bounded agent.")],
+    thread_id: Annotated[str | None, typer.Option("--thread-id", help="Stable workflow ID for resuming.")] = None,
+) -> None:
+    """Run until an answer or an approval checkpoint."""
+    from uuid import uuid4
+
+    identifier = thread_id or uuid4().hex
+    workflow, database, artifacts, connection = _agent_runtime(query)
+    try:
+        result = workflow.run(query, identifier)
+        _show_agent_result(identifier, result, artifacts)
+    finally:
+        database.close()
+        artifacts.close()
+        connection.close()
+
+
+@agent_app.command("resume")
+def agent_resume(thread_id: Annotated[str, typer.Argument(help="Workflow ID awaiting approval.")]) -> None:
+    """Review a pending write preview, then approve or reject it."""
+    workflow, database, artifacts, connection = _agent_runtime("")
+    try:
+        snapshot = workflow.graph.get_state({"configurable": {"thread_id": thread_id}})
+        if not snapshot.tasks or not snapshot.tasks[0].interrupts:
+            raise ConfigError(f"No pending approval for workflow {thread_id}")
+        payload = snapshot.tasks[0].interrupts[0].value
+        if payload.get("kind") != "write_approval":
+            raise ConfigError("Workflow is not awaiting write approval")
+        console.print(artifacts.get(payload["preview_ref"])["preview"], markup=False)
+        approved = typer.confirm("Apply this Vault change?", default=False)
+        result = workflow.resume(thread_id, approved=approved)
+        _show_agent_result(thread_id, result, artifacts)
+    finally:
+        database.close()
+        artifacts.close()
+        connection.close()
+
+
+def _show_agent_result(thread_id: str, result: dict, artifacts) -> None:
+    if result.get("__interrupt__"):
+        preview_ref = result["__interrupt__"][0].value["preview_ref"]
+        console.print(artifacts.get(preview_ref)["preview"], markup=False)
+        console.print(f"Approval required. Resume with: obsai agent resume {thread_id}")
+    else:
+        console.print(result.get("final_answer", "Agent stopped without an answer"), markup=False)
 
 
 def _safe_write_service():

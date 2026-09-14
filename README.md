@@ -297,3 +297,29 @@ new writes and reindexing are blocked until recovery. Use
 `obsai transaction status` to inspect affected paths and
 `obsai transaction recover ID` to preview a diff and confirm rollback from snapshots. Recovery
 refuses to overwrite files that no longer match a known transaction state.
+
+## Bounded agent workflow
+
+`obsai agent run "搜索 context"` performs a direct search without a planning loop.
+Questions use the existing hybrid retrieval, bounded `ContextBuilder`, LLM answer,
+and citation validation. Read, write, and organization requests enter a LangGraph
+workflow that selects from `search_notes`, `read_note`, `get_backlinks`,
+`get_outgoing_links`, `create_note`, `update_note`, `move_note`, `trash_note`, and
+`update_frontmatter`. The OpenAI planner requires `OPENAI_API_KEY`; tests use a
+mock planner and make no remote calls.
+
+The workflow stops after 15 tool steps, 5 retrievals, 3 consecutive errors, 2
+identical tool calls, or 3 steps without progress. It reports why it stopped.
+Checkpoint state stores note IDs, chunk IDs, and artifact references rather than
+note bodies or transaction snapshots. Workflow checkpoints and tool artifacts
+are stored beside the configured index as `agent-checkpoints.db` and
+`agent-artifacts.db`. They are distinct from the Vault transaction journal.
+
+Every write tool first creates a transaction plan and displays a diff. It then
+interrupts before applying anything. Resume with `obsai agent resume WORKFLOW_ID`
+to review the diff again and answer the yes/no prompt. A rejected plan leaves
+the Vault unchanged. Approval executes through `TransactionService`, which
+rechecks source hashes and handles rollback and index failure as described above.
+The CLI prints the workflow ID with each pending approval; pass `--thread-id`
+to `agent run` if you need a predetermined ID. Checkpoint resume survives a
+process restart as long as both agent SQLite files remain available.

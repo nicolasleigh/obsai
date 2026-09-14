@@ -13,6 +13,8 @@ dependencies = [
     "pathspec>=0.12,<2",
     "sqlite-vec>=0.1.6,<0.2",
     "openai>=1.0,<3",
+    "langgraph>=1,<2",
+    "langgraph-checkpoint-sqlite>=2,<4",
 ]
 
 [project.scripts]
