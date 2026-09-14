@@ -9,6 +9,7 @@ from obsai.config.models import AskConfig
 from obsai.errors import LLMError, ObsAIError
 from obsai.retrieval.hybrid import HybridRetriever
 from obsai.retrieval.models import SearchFilters
+from obsai.telemetry import measure, metric
 
 
 class AskService:
@@ -28,15 +29,18 @@ class AskService:
             query, limit=max(self.config.max_chunks * 3, 10), filters=filters
         )
         context = self.context_builder.build(query, list(outcome.results))
+        metric("llm.context", token_estimate=context.token_estimate,
+               evidence_count=len(context.evidence))
         if not context.evidence:
             return Answer("未找到可用于回答的笔记证据。", warnings=outcome.warnings, abstained=True)
         try:
-            response = asyncio.run(
-                self.provider.generate(
-                    context.system_prompt, context.user_prompt,
-                    max_output_tokens=self.config.max_output_tokens,
+            with measure("llm.generate", context_tokens=context.token_estimate):
+                response = asyncio.run(
+                    self.provider.generate(
+                        context.system_prompt, context.user_prompt,
+                        max_output_tokens=self.config.max_output_tokens,
+                    )
                 )
-            )
         except ObsAIError:
             raise
         except Exception as exc:

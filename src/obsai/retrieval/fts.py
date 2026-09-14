@@ -6,6 +6,7 @@ from obsai.retrieval.models import SearchFilters, SearchResult
 from obsai.retrieval.filters import metadata_conditions
 from obsai.storage import Database
 from obsai.storage.fts import cjk_text
+from obsai.telemetry import measured
 
 
 def _phrase(value: str) -> str:
@@ -16,6 +17,7 @@ class FTSRetriever:
     def __init__(self, database: Database):
         self.db = database
 
+    @measured("retrieval.fts")
     def search(
         self,
         query: str,

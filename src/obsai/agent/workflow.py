@@ -14,6 +14,8 @@ from obsai.agent.state import AgentState
 from obsai.agent.store import ArtifactStore
 from obsai.agent.tools import ALL_TOOLS, READ_TOOLS, WRITE_TOOLS, AgentTools
 from obsai.errors import ConfigError
+from obsai.shutdown import check_shutdown
+from obsai.telemetry import measure, metric
 
 
 FALLBACK = "Agent could not safely continue.\n\nReason: "
@@ -131,6 +133,9 @@ class AgentWorkflow:
         return summaries
 
     def _decide(self, state: AgentState) -> dict:
+        check_shutdown()
+        metric("agent.state", steps=state["step_count"],
+               retrieval_steps=state["retrieval_step_count"], errors=state["error_count"])
         if state.get("final_answer"):
             return {}
         if state["step_count"] >= self.limits.max_steps:
@@ -140,10 +145,11 @@ class AgentWorkflow:
         if state["no_progress_count"] >= self.limits.max_no_progress_steps:
             return self._stop("No progress")
         try:
-            decision = self.planner.decide(
-                query=state["query"], intent=state["intent"],
-                recent_summaries=self._summaries(state), available_tools=tuple(sorted(ALL_TOOLS)),
-            )
+            with measure("agent.planner"):
+                decision = self.planner.decide(
+                    query=state["query"], intent=state["intent"],
+                    recent_summaries=self._summaries(state), available_tools=tuple(sorted(ALL_TOOLS)),
+                )
         except Exception as exc:
             return self._stop(f"Planner failed: {type(exc).__name__}: {exc}")
         if decision.final_answer is not None:
@@ -152,6 +158,8 @@ class AgentWorkflow:
             return {"final_answer": decision.final_answer}
         if decision.tool not in ALL_TOOLS:
             return self._failure(state, f"Invalid tool: {decision.tool}", "invalid")
+        if decision.tool in WRITE_TOOLS and state["intent"] not in ("write_operation", "organization_task"):
+            return self._stop("Write tool is not authorized by the user's request")
         if decision.tool == "search_notes" and state["retrieval_step_count"] >= self.limits.max_retrieval_steps:
             return self._stop("Maximum retrieval steps reached")
         signature = hashlib.sha256(json.dumps(
@@ -180,6 +188,8 @@ class AgentWorkflow:
         return {"stop_reason": reason, "final_answer": FALLBACK + reason, "pending_tool": ""}
 
     def _failure(self, state: AgentState, message: str, signature: str) -> dict:
+        metric("agent.tool_error", errors=state["error_count"] + 1,
+               consecutive_errors=state["consecutive_error_count"] + 1)
         repeat = (signature == state.get("last_error_signature") and
                   state.get("same_tool_call_count", 0) >= self.limits.max_same_tool_call)
         if repeat:
@@ -198,6 +208,7 @@ class AgentWorkflow:
                 "last_error_signature": signature, "pending_tool": ""}
 
     def _execute_read(self, state: AgentState) -> dict:
+        check_shutdown()
         try:
             args = self.artifacts.get(state["pending_args_ref"])
             ref, notes, chunks, summary = self.tools.read(state["pending_tool"], args)
@@ -216,6 +227,7 @@ class AgentWorkflow:
                     "retrieval_step_count": state["retrieval_step_count"] + (state["pending_tool"] == "search_notes")}
 
     def _plan_write(self, state: AgentState) -> dict:
+        check_shutdown()
         try:
             args = self.artifacts.get(state["pending_args_ref"])
             ref, preview = self.tools.plan_write(state["pending_tool"], args)
@@ -240,6 +252,7 @@ class AgentWorkflow:
         return {"approved_changes": [*state["approved_changes"], plan_ref]}
 
     def _apply_write(self, state: AgentState) -> dict:
+        check_shutdown()
         try:
             result = self.tools.apply_write(state["approved_changes"][-1])
             message = "Change applied."

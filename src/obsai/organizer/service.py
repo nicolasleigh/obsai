@@ -14,6 +14,7 @@ from obsai.transactions import TransactionService
 from obsai.transactions.models import TransactionOperation, TransactionPlan, TransactionResult
 from obsai.vault.parser import parse_note
 from obsai.vault.scanner import scan_markdown_files
+from obsai.shutdown import check_shutdown
 
 
 def _terms(note) -> list[str]:
@@ -78,8 +79,10 @@ class InboxOrganizer:
         return proposals
 
     def _propose_one(self, note, visible_paths: set[str]) -> OrganizerProposal:
+        check_shutdown()
         evidence: dict[str, float] = defaultdict(float)
         for term in _terms(note):
+            check_shutdown()
             try:
                 results = self.retriever.search(term, limit=20)
             except Exception as exc:
@@ -147,6 +150,7 @@ class InboxOrganizer:
             raise TransactionError("Select at least one distinct proposal")
         chosen = []
         for index in selected:
+            check_shutdown()
             if index < 1 or index > len(proposals):
                 raise TransactionError(f"Invalid proposal number: {index}")
             proposal = proposals[index - 1]
@@ -156,6 +160,7 @@ class InboxOrganizer:
         moves = [(proposal.path, proposal.destination) for proposal in chosen]
         extras: list[TransactionOperation] = []
         for proposal in chosen:
+            check_shutdown()
             assert proposal.destination is not None
             parsed = parse_note(self.vault / proposal.path, vault_root=self.vault)
             if proposal.add_tags:

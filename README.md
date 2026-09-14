@@ -4,12 +4,20 @@ Local-first Obsidian CLI with Markdown parsing, context-aware chunking, a
 rebuildable SQLite index, hybrid retrieval, and evidence-bounded answers.
 `obsai index update` synchronizes a configured Vault.
 
+## Installation
+
+Requires Python 3.12+ and [uv](https://docs.astral.sh/uv/). Clone this repository,
+then run `uv sync --frozen`. `uv run obsai --help` verifies the installation.
+
+## Quick Start
+
 ```bash
 uv sync
 uv run obsai --help
 uv run obsai --version
 uv run obsai status
 uv run obsai index update
+uv run obsai index rebuild
 uv run obsai search "context.WithTimeout" --mode keyword
 uv run obsai index embeddings
 uv run obsai search "服务怎么平滑退出？" --mode semantic
@@ -17,6 +25,39 @@ uv run obsai ask "我以前如何理解 graceful shutdown？"
 uv run obsai note --help
 uv run pytest
 ```
+
+The first `index embeddings` run previews its remote cost and asks for approval.
+Search and parsing work locally without an API key; `ask` and the Agent require
+an explicitly configured remote provider and `OPENAI_API_KEY`.
+
+## Architecture
+
+The Vault is the source of truth. The read-only parser produces `ParsedNote`;
+context-aware chunking produces stable content hashes; SQLite stores derived
+metadata, FTS5 rows, and generation-isolated sqlite-vec vectors. Retrieval
+combines FTS and vectors with RRF. `ContextBuilder` selects bounded evidence
+before LLM generation and validates citation IDs. The Agent coordinates these
+services but only the safe-write and transaction services can edit Vault files.
+
+## Privacy Model
+
+Markdown parsing, indexing, keyword search, graph traversal, and local
+benchmarks never send Vault content to a provider. Approved embedding sends
+selected chunk text; approved semantic search sends the query; `ask` sends a
+bounded evidence excerpt and query. Review cost previews and diffs before
+approving remote calls or writes. API keys come from the environment and are
+not stored in the Vault or emitted by structured metrics.
+
+## Safety Model
+
+Vault Markdown is untrusted data. Code, HTML, JavaScript, and Dataview queries
+are parsed as text only. Retrieved evidence is explicitly labeled untrusted in
+LLM instructions, and a read-only Agent intent cannot become a write merely
+because a note instructs it to do so. Every Vault write requires a preview and
+human approval, checks the original content hash, stays within the configured
+Vault root, and rejects symlink traversal. Multi-file writes use snapshots,
+rollback, and a durable recovery journal. See [security review](docs/security-review.md)
+for the checked boundaries and residual limitations.
 
 The optional config file is `~/.config/obsai/config.toml` (or
 `$XDG_CONFIG_HOME/obsai/config.toml` when set):
@@ -379,3 +420,62 @@ existing outgoing links and rank semantic matches with graph proximity.
 shows a transaction diff, and requires a final yes/no confirmation before
 appending selected WikiLinks through the safe transaction service. Graph
 results reflect the last index update, so reindex after external Vault edits.
+
+## Index Rebuild
+
+`obsai index rebuild` builds `index.db.building` beside the live database,
+validates SQLite integrity, foreign keys, note count, and FTS row count, then
+atomically replaces the live index. A failed or interrupted build before the
+swap leaves the old index usable and removes the incomplete shadow. A signal
+during the final swap is deferred until the validated new index is in place.
+If `.building` remains
+after a hard process kill, the CLI warns; rerunning rebuild replaces that stale
+derived file. Close other index connections before rebuilding. Rebuild creates
+a fresh metadata index and discards old vectors, so run `obsai index embeddings`
+again and review its cost preview afterward. An interrupted Vault transaction
+is handled separately through `obsai transaction status` and recovery.
+
+SIGINT and SIGTERM stop new indexing, embedding, Agent, and organizer work at
+safe boundaries. A multi-file Vault transaction finishes its current atomic
+file operation, rolls back applied operations, and leaves a recovery journal
+if rollback cannot complete. After a successful Vault commit, an interrupted
+index update marks the index dirty instead of reverting the Vault.
+
+## Configuration
+
+The optional config file is `~/.config/obsai/config.toml`, or
+`$XDG_CONFIG_HOME/obsai/config.toml`. The minimal required setting for indexing
+is `[vault] path`; `[index] database` overrides the default
+`~/.obsai/index.db`. Embedding and organizer examples appear above. Set
+`OBSAI_LOG_LEVEL=INFO` to emit structured metrics; `DEBUG`, `WARNING`, and
+`ERROR` are also supported. Metric events contain timings and counts, not
+note text, queries, paths, or API keys.
+
+## Development
+
+Run `uv sync --frozen` to install locked dependencies. The source package is
+under `src/obsai/`; unit and integration tests live under `tests/`. The local
+benchmark uses a temporary synthetic Vault and a deterministic vector input:
+
+```bash
+uv run python scripts/benchmark.py
+uv run python scripts/benchmark.py --notes 100 --chunks-per-note 10 --vector-chunks 1000 --queries 10
+```
+
+The default workload is 10,000 notes and 100,000 chunks/vectors. The benchmark
+reports CLI startup, FTS/vector/hybrid P50 and P95, initial indexing, and an
+unchanged incremental update. Its vector timings exclude remote query
+embedding and network latency. Hardware, disk, query mix, and filters affect
+results; the 100 ms P95 goal is a release target, not a guarantee.
+The 10k/100k local run and measurement limits are recorded in
+[the benchmark report](docs/benchmark-2026-09-14.md).
+
+## Testing
+
+Run `uv run pytest -q`. Tests use temporary Vaults and SQLite databases;
+providers are mocked, so they never use the real HOME or make remote calls.
+Failure injection covers signals during rebuild, transaction, and embedding;
+parse failure, disk failure, 429, timeout, OCC conflict, rollback, and index
+failure. The release gate requires all tests passing, no known data-loss bug,
+approval for every write, working OCC and rollback, recoverable rebuild,
+bounded Agent execution, validated citations, cost preview, and this README.

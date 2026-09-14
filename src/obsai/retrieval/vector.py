@@ -5,6 +5,7 @@ import asyncio
 from obsai.embedding.pipeline import EmbeddingPipeline
 from obsai.retrieval.models import SearchFilters, SearchResult
 from obsai.storage.vectors import SQLiteVectorStore
+from obsai.telemetry import measured
 
 
 class VectorRetriever:
@@ -15,6 +16,7 @@ class VectorRetriever:
         self.pipeline = pipeline
         self.approved = approved
 
+    @measured("retrieval.vector")
     def search(
         self,
         query: str,

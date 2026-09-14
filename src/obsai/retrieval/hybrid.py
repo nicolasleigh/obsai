@@ -8,6 +8,7 @@ from obsai.errors import EmbeddingError
 from obsai.retrieval.fusion import rrf_fuse
 from obsai.retrieval.models import Retriever, SearchFilters, SearchResult
 from obsai.retrieval.reranker import NoOpReranker, Reranker
+from obsai.telemetry import measured
 
 logger = logging.getLogger(__name__)
 
@@ -47,6 +48,7 @@ class HybridRetriever:
         self.semantic_unavailable_reason = semantic_unavailable_reason
         self.last_warnings: tuple[str, ...] = ()
 
+    @measured("retrieval.hybrid")
     def search_with_status(
         self,
         query: str,

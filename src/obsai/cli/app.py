@@ -121,6 +121,9 @@ def cli(
     from obsai.transactions import TransactionService
 
     settings = load_settings()
+    database_path = (settings.index.database or Path.home() / ".obsai" / "index.db").expanduser()
+    if database_path.with_name(database_path.name + ".building").exists():
+        error_console.print("Interrupted shadow index found; run 'obsai index rebuild' to replace it safely")
     if settings.vault.path is None or not settings.vault.path.expanduser().is_dir():
         return
     try:
@@ -190,6 +193,21 @@ def index_update() -> None:
                 console.print(f"  {link.source_path}: [[{link.target_path or ''}]]")
 
 
+@index_app.command("rebuild")
+def index_rebuild() -> None:
+    """Build and validate index.db.building, then atomically replace index.db."""
+    from obsai.indexing import ShadowIndexRebuilder
+
+    settings = load_settings()
+    if settings.vault.path is None:
+        raise ConfigError("No vault configured; set vault.path in config.toml")
+    database_path = (settings.index.database or Path.home() / ".obsai" / "index.db").expanduser()
+    result = ShadowIndexRebuilder(settings.vault.path, database_path).rebuild()
+    console.print(f"Shadow index validated and activated: {database_path}", markup=False)
+    console.print(f"Notes indexed: {result.count('created')}")
+    console.print("Embeddings must be regenerated with 'obsai index embeddings'")
+
+
 @index_app.command("embeddings")
 def index_embeddings() -> None:
     """Preflight and populate a generation-isolated local vector index."""
@@ -211,7 +229,12 @@ def index_embeddings() -> None:
         console.print(f"Estimated cost: ${plan.estimated_cost_usd:.6f}")
         if plan.request_count and not typer.confirm("Proceed with remote embeddings?", default=False):
             raise typer.Exit(1)
-        attached = asyncio.run(pipeline.execute(plan, approved=bool(plan.request_count)))
+        from obsai.shutdown import defer_shutdown
+
+        # Signal handlers mark cancellation while an async request is in flight;
+        # workers stop before scheduling the next batch.
+        with defer_shutdown():
+            attached = asyncio.run(pipeline.execute(plan, approved=bool(plan.request_count)))
         console.print(f"Vectors attached: {attached}")
 
 
@@ -361,28 +384,38 @@ def _agent_runtime(query: str):
     if not database_path.is_file():
         raise ConfigError("Index does not exist; run 'obsai index update' first")
     database = Database(database_path)
-    semantic, reason = _semantic_retriever(database, query)
-    retriever = HybridRetriever(FTSRetriever(database), semantic,
-                                semantic_unavailable_reason=reason)
-    artifacts = ArtifactStore(database_path.with_name("agent-artifacts.db"))
-    checkpoint_connection = sqlite3.connect(database_path.with_name("agent-checkpoints.db"),
-                                            check_same_thread=False)
-    checkpointer = SqliteSaver(checkpoint_connection)
-    checkpointer.setup()
-    answering = AskService(retriever, ContextBuilder(SQLiteEvidenceRepository(database), settings.ask),
-                           OpenAILLMProvider(settings.ask), settings.ask)
+    artifacts = None
+    checkpoint_connection = None
+    try:
+        semantic, reason = _semantic_retriever(database, query)
+        retriever = HybridRetriever(FTSRetriever(database), semantic,
+                                    semantic_unavailable_reason=reason)
+        artifacts = ArtifactStore(database_path.with_name("agent-artifacts.db"))
+        checkpoint_connection = sqlite3.connect(database_path.with_name("agent-checkpoints.db"),
+                                                check_same_thread=False)
+        checkpointer = SqliteSaver(checkpoint_connection)
+        checkpointer.setup()
+        answering = AskService(retriever, ContextBuilder(SQLiteEvidenceRepository(database), settings.ask),
+                               OpenAILLMProvider(settings.ask), settings.ask)
 
-    def answer_question(question: str):
-        answer = answering.ask(question)
-        return answer.text, [source.record.note_id for source in answer.sources], [
-            source.record.chunk_id for source in answer.sources]
+        def answer_question(question: str):
+            answer = answering.ask(question)
+            return answer.text, [source.record.note_id for source in answer.sources], [
+                source.record.chunk_id for source in answer.sources]
 
-    workflow = AgentWorkflow(
-        AgentTools(database_path, settings.vault.path, retriever, artifacts),
-        artifacts, OpenAIDecisionProvider(settings.ask), checkpointer=checkpointer,
-        answer_question=answer_question,
-    )
-    return workflow, database, artifacts, checkpoint_connection
+        workflow = AgentWorkflow(
+            AgentTools(database_path, settings.vault.path, retriever, artifacts),
+            artifacts, OpenAIDecisionProvider(settings.ask), checkpointer=checkpointer,
+            answer_question=answer_question,
+        )
+        return workflow, database, artifacts, checkpoint_connection
+    except BaseException:
+        if checkpoint_connection is not None:
+            checkpoint_connection.close()
+        if artifacts is not None:
+            artifacts.close()
+        database.close()
+        raise
 
 
 @agent_app.command("run")
@@ -826,9 +859,15 @@ def transaction_recover(
 
 def main() -> None:
     """Console-script entry point with a shared boundary for domain errors."""
+    from obsai.shutdown import ShutdownController, ShutdownRequested
+
     configure_logging()
     try:
-        app()
+        with ShutdownController():
+            app()
+    except ShutdownRequested as exc:
+        error_console.print("Shutdown requested; current operation stopped safely")
+        raise SystemExit(exc.exit_code) from None
     except ObsAIError as exc:
         logger.debug("CLI error: %s", exc)
         error_console.print(f"Error: {exc}")
@@ -837,3 +876,5 @@ def main() -> None:
         logger.exception("Unexpected CLI error")
         error_console.print("Error: Unexpected failure")
         raise SystemExit(1) from None
+    finally:
+        logging.shutdown()

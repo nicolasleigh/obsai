@@ -5,6 +5,7 @@ import re
 from obsai.graph import GraphNeighborhood, GraphService
 from obsai.retrieval.models import Retriever, SearchFilters, SearchResult
 from obsai.storage.repositories import IndexRepository
+from obsai.telemetry import measured
 
 
 class GraphRetriever:
@@ -40,6 +41,7 @@ class GraphRetriever:
 
         return max(chunks, key=rank)
 
+    @measured("retrieval.graph")
     def search(self, query: str, limit: int = 10,
                filters: SearchFilters | None = None) -> list[SearchResult]:
         self.last_neighborhood = None

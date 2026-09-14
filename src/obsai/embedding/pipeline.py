@@ -14,6 +14,8 @@ from obsai.errors import (
     EmbeddingServiceError,
 )
 from obsai.storage.vectors import SQLiteVectorStore
+from obsai.shutdown import check_shutdown
+from obsai.telemetry import measure, measured, measured_async, metric
 
 
 @dataclass(frozen=True)
@@ -101,6 +103,7 @@ class EmbeddingPipeline:
             batches.append(tuple(current))
         return tuple(batches)
 
+    @measured("embedding.plan_latency")
     def plan(self) -> EmbeddingPlan:
         rows = self.store.db.connection.execute(
             "SELECT id, embedding_text, embedding_text_hash FROM chunks ORDER BY note_id, position"
@@ -110,6 +113,7 @@ class EmbeddingPipeline:
         cached_hashes: set[str] = set()
         cache_hits = 0
         for row in rows:
+            check_shutdown()
             chunk_id, text_hash = row["id"], row["embedding_text_hash"]
             if self.store.has_chunk(self.generation, chunk_id, text_hash):
                 continue
@@ -126,6 +130,9 @@ class EmbeddingPipeline:
         batches = self._batches(list(remote.values()))
         tokens = sum(item.tokens for item in remote.values())
         self._check_budget(tokens, len(batches))
+        metric("embedding.plan", chunks=len(pending), cache_hits=cache_hits,
+               tokens=tokens, requests=len(batches),
+               estimated_cost_usd=float(Decimal(tokens) * self.price / Decimal(1_000_000)))
         return EmbeddingPlan(
             self.generation, tuple(pending), tuple(remote.values()), batches,
             cache_hits, tokens, Decimal(tokens) * self.price / Decimal(1_000_000),
@@ -134,6 +141,7 @@ class EmbeddingPipeline:
     async def _request(self, texts: list[str]) -> list[list[float]]:
         request_tokens = sum(self.count_tokens(text) for text in texts)
         for attempt in range(1, self.config.max_attempts + 1):
+            check_shutdown()
             async with self._attempt_lock:
                 if (self.config.max_embedding_requests is not None
                         and self.attempts >= self.config.max_embedding_requests):
@@ -149,11 +157,14 @@ class EmbeddingPipeline:
                 self.attempts += 1
                 self.actual_tokens = next_tokens
             try:
-                vectors = await asyncio.wait_for(
-                    self.provider.embed(texts), timeout=self.config.timeout_seconds
-                )
+                with measure("embedding.request", tokens=request_tokens,
+                             estimated_cost_usd=float(Decimal(request_tokens) * self.price / Decimal(1_000_000))):
+                    vectors = await asyncio.wait_for(
+                        self.provider.embed(texts), timeout=self.config.timeout_seconds
+                    )
                 if len(vectors) != len(texts):
                     raise EmbeddingError("Provider returned the wrong number of vectors")
+                check_shutdown()
                 return vectors
             except (EmbeddingRateLimitError, EmbeddingServiceError,
                     asyncio.TimeoutError, TimeoutError, ConnectionError):
@@ -162,34 +173,49 @@ class EmbeddingPipeline:
                 await self.sleep(min(30.0, 2 ** (attempt - 1)) * self.jitter())
         raise AssertionError("unreachable")
 
+    @measured_async("embedding.execute")
     async def execute(self, plan: EmbeddingPlan, *, approved: bool = False) -> int:
         if plan.generation != self.generation:
             raise EmbeddingError("Plan belongs to a different embedding generation")
         if plan.request_count and not approved:
             raise EmbeddingError("Remote embeddings require explicit approval")
-        semaphore = asyncio.Semaphore(self.config.max_concurrency)
+        results: list[list[list[float]] | None] = [None] * len(plan.batches)
+        cursor = 0
 
-        async def run_batch(batch: tuple[PendingText, ...]) -> list[list[float]]:
-            async with semaphore:
-                return await self._request([item.text for item in batch])
+        async def worker() -> None:
+            nonlocal cursor
+            while cursor < len(plan.batches):
+                check_shutdown()
+                number = cursor
+                cursor += 1
+                batch = plan.batches[number]
+                results[number] = await self._request([item.text for item in batch])
+                check_shutdown()
 
-        tasks = [asyncio.create_task(run_batch(batch)) for batch in plan.batches]
+        tasks = [asyncio.create_task(worker())
+                 for _ in range(min(self.config.max_concurrency, len(plan.batches)))]
         try:
-            results = await asyncio.gather(*tasks)
+            await asyncio.gather(*tasks)
         except BaseException:
             for task in tasks:
                 task.cancel()
             await asyncio.gather(*tasks, return_exceptions=True)
             raise
+        check_shutdown()
+        if any(vectors is None for vectors in results):
+            raise EmbeddingError("Embedding batch stopped before completion")
         generated = {
             item.text_hash: vector
             for batch, vectors in zip(plan.batches, results, strict=True)
+            if vectors is not None
             for item, vector in zip(batch, vectors, strict=True)
         }
         token_counts = {item.text_hash: item.tokens for item in plan.remote_texts}
         with self.store.db.transaction():
+            check_shutdown()
             self.store.ensure_generation(self.generation)
             for chunk_id, text_hash in plan.pending_chunks:
+                check_shutdown()
                 vector = generated.get(text_hash)
                 if vector is None:
                     vector = self.store.get_cached(self.generation, text_hash)
@@ -207,4 +233,5 @@ class EmbeddingPipeline:
         tokens = self.count_tokens(query)
         self._batches([PendingText("query", query, tokens)])
         self._check_budget(tokens, 1)
+        check_shutdown()
         return (await self._request([query]))[0]

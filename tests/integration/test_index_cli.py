@@ -57,3 +57,21 @@ def test_index_update_uses_isolated_default_database_path(tmp_path: Path) -> Non
     assert result.exit_code == 0, result.output
     assert "Created: 1" in result.output
     assert (tmp_path / ".obsai" / "index.db").is_file()
+
+
+def test_index_rebuild_cli_swaps_shadow_and_reports_counts(tmp_path: Path) -> None:
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    (vault / "A.md").write_text("# A\n\nBody.\n", encoding="utf-8")
+    database_path = tmp_path / "index.db"
+    config = tmp_path / "config" / "obsai" / "config.toml"
+    config.parent.mkdir(parents=True)
+    config.write_text(
+        f'[vault]\npath = "{vault}"\n[index]\ndatabase = "{database_path}"\n',
+        encoding="utf-8",
+    )
+    result = runner.invoke(app, ["index", "rebuild"])
+    assert result.exit_code == 0, result.output
+    assert "Notes indexed: 1" in result.output
+    assert database_path.exists()
+    assert not (tmp_path / "index.db.building").exists()

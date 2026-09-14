@@ -13,6 +13,7 @@ from obsai.storage import IndexRepository, LinkImpact
 from obsai.vault import scan_markdown_files
 from obsai.vault.models import ParsedNote
 from obsai.vault.parser import parse_markdown
+from obsai.shutdown import check_shutdown
 
 ChangeKind = Literal["unchanged", "created", "modified", "deleted", "renamed", "moved"]
 
@@ -66,6 +67,7 @@ class IncrementalIndexer:
         unchanged: list[FileChange] = []
 
         for path in files:
+            check_shutdown()
             relative = path.relative_to(root).as_posix()
             current_paths.add(relative)
             content_hash = _hash(_read_note(path))
@@ -115,12 +117,14 @@ class IncrementalIndexer:
         # earlier note writes without retaining the entire Vault in memory.
         with self.repository.db.transaction():
             for path, record in sorted(disappeared.items()):
+                check_shutdown()
                 if (root / path).exists():
                     raise VaultError(f"Note reappeared during index update: {path}")
                 self.repository.notes.delete(record.id)
                 self.repository.clear_dirty(path)
                 changes.append(FileChange("deleted", path, note_id=record.id))
             for move in sorted(moves, key=lambda item: item.path):
+                check_shutdown()
                 if _hash(_read_note(root / move.path)) != move_hashes[move.path]:
                     raise VaultError(f"Note changed during index update: {move.path}")
                 assert move.note_id is not None
@@ -128,17 +132,20 @@ class IncrementalIndexer:
                 self.repository.clear_dirty(move.path)
                 changes.append(move)
             for path in sorted(modified_hashes):
+                check_shutdown()
                 parsed = parse_changed(path, modified_hashes[path])
                 note_id = self.repository.index_note(
                     parsed, chunk_note(parsed), reconcile=False
                 )
                 changes.append(FileChange("modified", path, note_id=note_id))
             for path in sorted(new_hashes):
+                check_shutdown()
                 parsed = parse_changed(path, new_hashes[path])
                 note_id = self.repository.index_note(
                     parsed, chunk_note(parsed), reconcile=False
                 )
                 changes.append(FileChange("created", path, note_id=note_id))
+            check_shutdown()
             self.repository.reconcile_links(full=bool(moves or disappeared or new_hashes))
             self.repository.set_state("last_update", datetime.now(timezone.utc).isoformat())
         return UpdateResult(tuple(sorted(changes, key=lambda item: (item.path, item.kind))))

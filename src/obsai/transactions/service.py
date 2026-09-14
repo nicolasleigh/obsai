@@ -21,6 +21,7 @@ from obsai.transactions.backlinks import rewrite_explicit_links
 from obsai.transactions.journal import TransactionJournal, UNFINISHED, journal_base, list_journals
 from obsai.transactions.models import TransactionOperation, TransactionPlan, TransactionResult
 from obsai.vault.scanner import scan_markdown_files
+from obsai.shutdown import ShutdownRequested, check_shutdown, defer_shutdown
 
 
 class TransactionService:
@@ -361,46 +362,61 @@ class TransactionService:
         if not approved:
             return TransactionResult(None, committed=False, cancelled=True)
         self.preflight(plan)
+        check_shutdown()
         transaction_id = uuid4().hex
         try:
-            journal = TransactionJournal.create(self.root, transaction_id, plan)
+            with defer_shutdown():
+                journal = TransactionJournal.create(self.root, transaction_id, plan)
         except OSError as exc:
             raise TransactionError(f"Cannot prepare transaction snapshots: {exc}") from exc
         applied_count = 0
         try:
+            check_shutdown()
             journal.update(status="applying")
             for change in plan.changes:
-                self.safe.apply(ChangeSet(change), approved=True)
-                applied_count += 1
-                journal.update(applied_count=applied_count)
+                check_shutdown()
+                with defer_shutdown():
+                    self.safe.apply(ChangeSet(change), approved=True)
+                    applied_count += 1
+                    journal.update(applied_count=applied_count)
+                check_shutdown()
             self._verify(plan.finals)
+            check_shutdown()
             journal.update(status="committed")
-        except Exception as exc:
-            try:
-                journal.update(status="rolling_back", error=f"{type(exc).__name__}: {exc}")
-                self._rollback(
-                    plan.originals, plan.original_modes, plan.changes, applied_count,
-                    plan.absent_directories,
-                )
-                journal.update(status="rolled_back")
-                self._cleanup(journal)
-            except Exception as rollback_exc:
-                journal.update(status="recovery_required", error=f"{type(rollback_exc).__name__}: {rollback_exc}")
-                raise RecoveryRequiredError(
-                    f"Rollback failed for {transaction_id}; run 'obsai transaction recover {transaction_id}'"
-                ) from rollback_exc
+        except BaseException as exc:
+            with defer_shutdown():
+                try:
+                    journal.update(status="rolling_back", error=f"{type(exc).__name__}: {exc}")
+                    self._rollback(
+                        plan.originals, plan.original_modes, plan.changes, applied_count,
+                        plan.absent_directories,
+                    )
+                    journal.update(status="rolled_back")
+                    self._cleanup(journal)
+                except BaseException as rollback_exc:
+                    journal.update(status="recovery_required", error=f"{type(rollback_exc).__name__}: {rollback_exc}")
+                    raise RecoveryRequiredError(
+                        f"Rollback failed for {transaction_id}; run 'obsai transaction recover {transaction_id}'"
+                    ) from rollback_exc
+            if isinstance(exc, ShutdownRequested):
+                raise
             raise TransactionError(f"Transaction failed and was rolled back: {exc}") from exc
 
         try:
+            check_shutdown()
             self._reindex(plan)
-        except Exception as exc:
+        except BaseException as exc:
             paths = sorted(self._changed_paths(plan.changes))
             reason = f"Index update failed after Vault commit: {type(exc).__name__}: {exc}"
-            journal.update(status="index_dirty", dirty_paths=paths, error=reason)
-            self._mark_index_dirty(paths, reason)
+            with defer_shutdown():
+                journal.update(status="index_dirty", dirty_paths=paths, error=reason)
+                self._mark_index_dirty(paths, reason)
+            if isinstance(exc, ShutdownRequested):
+                raise
             return TransactionResult(transaction_id, committed=True, index_dirty=True, index_error=reason)
-        journal.update(status="complete")
-        self._cleanup(journal)
+        with defer_shutdown():
+            journal.update(status="complete")
+            self._cleanup(journal)
         return TransactionResult(transaction_id, committed=True)
 
     def recover(self, transaction_id: str, *, approved: bool) -> TransactionResult:
