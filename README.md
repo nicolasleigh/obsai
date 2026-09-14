@@ -1,8 +1,8 @@
 # ObsAgent CLI
 
-Local-first Obsidian CLI with Markdown parsing, context-aware chunking, and a
-rebuildable SQLite metadata index. `obsai index update` synchronizes a configured
-Vault; the underlying layers are also available through the Python API.
+Local-first Obsidian CLI with Markdown parsing, context-aware chunking, a
+rebuildable SQLite index, hybrid retrieval, and evidence-bounded answers.
+`obsai index update` synchronizes a configured Vault.
 
 ```bash
 uv sync
@@ -13,6 +13,7 @@ uv run obsai index update
 uv run obsai search "context.WithTimeout" --mode keyword
 uv run obsai index embeddings
 uv run obsai search "服务怎么平滑退出？" --mode semantic
+uv run obsai ask "我以前如何理解 graceful shutdown？"
 uv run pytest
 ```
 
@@ -199,3 +200,35 @@ contains queries and expected note paths. `obsai.retrieval.evaluation.evaluate`
 calculates macro Recall@K, MRR, and Precision@K. The mock-backed integration
 benchmark checks that hybrid scores do not fall below either single path at
 K=2; it does not measure real OpenAI embedding quality.
+
+## Ask with citations
+
+`obsai ask "..."` performs one hybrid retrieval and one LLM request. It loads
+the selected chunks' original content from SQLite; FTS snippets are never used
+as evidence. The ContextBuilder keeps ranked results, removes repeated chunk
+IDs, and enforces all three independent limits below. Evidence sent to the
+provider carries `[S1]`, `[S2]`, etc., with path, title, heading, and block
+metadata. The CLI prints only sources cited in the accepted answer.
+
+```toml
+[ask]
+provider = "openai"
+model = "gpt-4.1-mini"
+timeout_seconds = 60
+max_output_tokens = 1024
+max_context_tokens = 12000
+max_evidence_tokens = 2500
+max_chunks = 6
+```
+
+Set `OPENAI_API_KEY` for a real answer. If a vector generation is available,
+the CLI requests confirmation before embedding the query, as with hybrid
+search. A missing or failed semantic backend is reported and keyword results
+are used. With no evidence, the CLI abstains without calling the LLM. If the
+model returns an unknown citation ID or no citation, its answer is discarded
+and an abstention is shown. Limits use UTF-8 byte length as a conservative,
+offline token upper bound and may admit less evidence than a model tokenizer.
+Long evidence is visibly truncated. Citation checking verifies source IDs,
+not whether every natural-language claim faithfully paraphrases its source;
+the prompt requires grounded, cited answers. Tests replace the LLM adapter and
+make no remote calls. The Vault remains read-only.

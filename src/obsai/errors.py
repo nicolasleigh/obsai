@@ -35,3 +35,11 @@ class EmbeddingRateLimitError(EmbeddingError):
 
 class EmbeddingServiceError(EmbeddingError):
     """A provider temporarily failed with a server error."""
+
+
+class ContextError(ObsAIError):
+    """Evidence cannot fit within the configured context budget."""
+
+
+class LLMError(ObsAIError):
+    """The answer provider could not generate a response."""

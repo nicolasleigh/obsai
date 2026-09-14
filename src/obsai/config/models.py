@@ -37,6 +37,18 @@ class EmbeddingConfig(BaseModel):
     price_per_million_tokens_usd: float | None = Field(default=None, ge=0)
 
 
+class AskConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    provider: str = "openai"
+    model: str = "gpt-4.1-mini"
+    timeout_seconds: float = Field(default=60, gt=0)
+    max_output_tokens: int = Field(default=1024, gt=0)
+    max_context_tokens: int = Field(default=12000, gt=0)
+    max_evidence_tokens: int = Field(default=2500, gt=0)
+    max_chunks: int = Field(default=6, gt=0)
+
+
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
         env_prefix="OBSAI_", env_nested_delimiter="__", extra="forbid"
@@ -45,6 +57,7 @@ class Settings(BaseSettings):
     vault: VaultConfig = Field(default_factory=VaultConfig)
     index: IndexConfig = Field(default_factory=IndexConfig)
     embedding: EmbeddingConfig = Field(default_factory=EmbeddingConfig)
+    ask: AskConfig = Field(default_factory=AskConfig)
 
     @classmethod
     def settings_customise_sources(

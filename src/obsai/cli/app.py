@@ -41,6 +41,32 @@ def _embedding_pipeline(database):
     return store, EmbeddingPipeline(store, provider, config)
 
 
+def _semantic_retriever(database, query: str, *, strict: bool = False):
+    from obsai.retrieval import VectorRetriever
+
+    semantic = None
+    reason = "Semantic index missing; run 'obsai index embeddings'; using keyword results"
+    try:
+        store, pipeline = _embedding_pipeline(database)
+        if store.has_generation(pipeline.generation) and query.strip():
+            tokens = pipeline.count_tokens(query)
+            pipeline._check_budget(tokens, 1)
+            error_console.print(f"Query embedding tokens: {tokens}")
+            error_console.print(f"Estimated cost: ${tokens * pipeline.price / 1_000_000:.6f}")
+            if typer.confirm("Send search query for remote embedding?", default=False, err=True):
+                semantic = VectorRetriever(store, pipeline, approved=True)
+            else:
+                reason = "Semantic query was not approved; using keyword results"
+    except Exception as exc:
+        if strict:
+            raise
+        reason = (
+            f"Semantic backend unavailable ({type(exc).__name__}: {exc}); "
+            "using keyword results"
+        )
+    return semantic, reason
+
+
 def _key_value_filters(values: list[str] | None, *, json_value: bool) -> dict:
     parsed = {}
     for item in values or []:
@@ -168,7 +194,7 @@ def search(
     json_output: Annotated[bool, typer.Option("--json", help="Print structured JSON.")] = False,
 ) -> None:
     """Search the local hybrid, keyword, or semantic index."""
-    from obsai.retrieval import FTSRetriever, HybridRetriever, SearchFilters, VectorRetriever
+    from obsai.retrieval import FTSRetriever, HybridRetriever, SearchFilters
     from obsai.storage import Database
 
     if mode not in ("hybrid", "keyword", "semantic"):
@@ -193,26 +219,9 @@ def search(
         if mode == "keyword":
             results = FTSRetriever(database).search(query, limit=limit, filters=filters)
         else:
-            semantic = None
-            reason = "Semantic index missing; run 'obsai index embeddings'; using keyword results"
-            try:
-                store, pipeline = _embedding_pipeline(database)
-                if store.has_generation(pipeline.generation) and query.strip():
-                    tokens = pipeline.count_tokens(query)
-                    pipeline._check_budget(tokens, 1)
-                    error_console.print(f"Query embedding tokens: {tokens}")
-                    error_console.print(f"Estimated cost: ${tokens * pipeline.price / 1_000_000:.6f}")
-                    if typer.confirm("Send search query for remote embedding?", default=False, err=True):
-                        semantic = VectorRetriever(store, pipeline, approved=True)
-                    else:
-                        reason = "Semantic query was not approved; using keyword results"
-            except Exception as exc:
-                if mode == "semantic" or strict_semantic:
-                    raise
-                reason = (
-                    f"Semantic backend unavailable ({type(exc).__name__}: {exc}); "
-                    "using keyword results"
-                )
+            semantic, reason = _semantic_retriever(
+                database, query, strict=mode == "semantic" or strict_semantic
+            )
             if mode == "semantic":
                 if semantic is None:
                     raise ConfigError(reason)
@@ -235,6 +244,48 @@ def search(
             if result.heading_path:
                 console.print(" > ".join(result.heading_path))
             console.print(result.snippet, markup=False)
+
+
+@app.command()
+def ask(
+    query: Annotated[str, typer.Argument(help="Question about indexed Vault notes.")],
+) -> None:
+    """Answer once from bounded retrieved evidence with validated citations."""
+    from obsai.answering.context import ContextBuilder
+    from obsai.answering.openai_provider import OpenAILLMProvider
+    from obsai.answering.service import AskService
+    from obsai.retrieval import FTSRetriever, HybridRetriever
+    from obsai.storage import Database, SQLiteEvidenceRepository
+
+    settings = load_settings()
+    database_path = (
+        settings.index.database or Path.home() / ".obsai" / "index.db"
+    ).expanduser()
+    if not database_path.is_file():
+        raise ConfigError("Index does not exist; run 'obsai index update' first")
+    with Database(database_path) as database:
+        semantic, reason = _semantic_retriever(database, query)
+        retriever = HybridRetriever(
+            FTSRetriever(database), semantic, semantic_unavailable_reason=reason
+        )
+        service = AskService(
+            retriever, ContextBuilder(SQLiteEvidenceRepository(database), settings.ask),
+            OpenAILLMProvider(settings.ask), settings.ask,
+        )
+        answer = service.ask(query)
+    for warning in answer.warnings:
+        error_console.print(f"Warning: {warning}")
+    console.print(answer.text, markup=False)
+    if answer.sources:
+        console.print("\nSources:")
+        for source in answer.sources:
+            record = source.record
+            location = record.path
+            if record.heading_path:
+                location += " > " + " > ".join(record.heading_path)
+            if record.block_id:
+                location += f" ^{record.block_id}"
+            console.print(f"[{source.citation_id}] {location}", markup=False)
 
 
 def main() -> None:

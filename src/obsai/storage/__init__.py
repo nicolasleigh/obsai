@@ -1,6 +1,7 @@
 """Local, rebuildable SQLite metadata index."""
 
 from obsai.storage.database import Database
+from obsai.storage.evidence import SQLiteEvidenceRepository
 from obsai.storage.vectors import SQLiteVectorStore
 from obsai.storage.repositories import (
     ChunkRepository,
@@ -14,6 +15,6 @@ from obsai.storage.repositories import (
 )
 
 __all__ = [
-    "Database", "NoteRepository", "ChunkRepository", "IndexRepository", "SQLiteVectorStore",
+    "Database", "NoteRepository", "ChunkRepository", "IndexRepository", "SQLiteVectorStore", "SQLiteEvidenceRepository",
     "NoteRecord", "IndexedFile", "LinkRecord", "LinkImpact", "DirtyNote",
 ]

@@ -14,6 +14,7 @@ def test_defaults_do_not_create_config(tmp_path: Path) -> None:
     assert settings.embedding.provider == "openai"
     assert settings.embedding.model == "text-embedding-3-small"
     assert settings.embedding.batch_size == 64
+    assert settings.ask.max_chunks == 6
     assert not (tmp_path / "config").exists()
 
 
@@ -69,5 +70,20 @@ def test_embedding_config_and_budget_validation(tmp_path: Path) -> None:
     assert settings.embedding.batch_size == 8
     assert settings.embedding.max_embedding_tokens == 1000
     config.write_text('[embedding]\nbatch_size = 0\n', encoding="utf-8")
+    with pytest.raises(ConfigError, match="Invalid configuration"):
+        load_settings(config)
+
+
+def test_ask_budget_configuration_and_validation(tmp_path: Path) -> None:
+    config = tmp_path / "config.toml"
+    config.write_text(
+        '[ask]\nmax_context_tokens = 900\nmax_evidence_tokens = 150\nmax_chunks = 2\n',
+        encoding="utf-8",
+    )
+    settings = load_settings(config)
+    assert settings.ask.max_context_tokens == 900
+    assert settings.ask.max_evidence_tokens == 150
+    assert settings.ask.max_chunks == 2
+    config.write_text('[ask]\nmax_chunks = 0\n', encoding="utf-8")
     with pytest.raises(ConfigError, match="Invalid configuration"):
         load_settings(config)
