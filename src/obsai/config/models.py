@@ -1,8 +1,9 @@
 """Phase 0 configuration fields."""
 
 from pathlib import Path
+from pathlib import PurePosixPath
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 from pydantic_settings import BaseSettings, PydanticBaseSettingsSource, SettingsConfigDict
 
 
@@ -49,6 +50,22 @@ class AskConfig(BaseModel):
     max_chunks: int = Field(default=6, gt=0)
 
 
+class OrganizeConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    inbox: str = "Inbox"
+
+    @field_validator("inbox")
+    @classmethod
+    def valid_inbox(cls, value: str) -> str:
+        value = value.strip().rstrip("/")
+        parts = PurePosixPath(value).parts
+        if (not value or value == "." or value.startswith("/") or "\\" in value
+                or any(part in (".", "..") for part in parts)):
+            raise ValueError("inbox must be a safe Vault-relative directory")
+        return value
+
+
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
         env_prefix="OBSAI_", env_nested_delimiter="__", extra="forbid"
@@ -58,6 +75,7 @@ class Settings(BaseSettings):
     index: IndexConfig = Field(default_factory=IndexConfig)
     embedding: EmbeddingConfig = Field(default_factory=EmbeddingConfig)
     ask: AskConfig = Field(default_factory=AskConfig)
+    organize: OrganizeConfig = Field(default_factory=OrganizeConfig)
 
     @classmethod
     def settings_customise_sources(

@@ -86,12 +86,17 @@ class TransactionService:
                 _encode(operation.new)
                 changes.append(FileChange("create", path, None, None, None, operation.new))
                 virtual[path] = operation.new
-            elif operation.kind in ("replace", "rewrite_backlinks", "frontmatter"):
+            elif operation.kind in ("replace", "append", "rewrite_backlinks", "frontmatter"):
                 if current is None:
                     raise ConflictError(f"Note disappeared: {path}")
                 if operation.kind == "frontmatter":
                     updated = patch_frontmatter(current, operation.updates)
                     kind = "frontmatter"
+                elif operation.kind == "append":
+                    if not operation.new:
+                        raise SafeWriteError(f"Append requires nonempty content: {path}")
+                    updated = current + operation.new
+                    kind = "update"
                 elif operation.kind == "replace":
                     if not operation.old or current.count(operation.old) != 1 or operation.new is None:
                         raise SafeWriteError(f"Exact replacement must match once: {path}")
@@ -141,26 +146,51 @@ class TransactionService:
 
     def plan_move_with_backlinks(self, path: str, destination: str) -> TransactionPlan:
         """Move and rewrite only parser-confirmed, explicit vault-root path links."""
+        return self.plan_moves_with_backlinks([(path, destination)])
+
+    def plan_moves_with_backlinks(
+        self, moves: Sequence[tuple[str, str]],
+        extra_operations: Sequence[TransactionOperation] = (),
+    ) -> TransactionPlan:
+        """Plan a selected batch as one transaction, including conservative backlink rewrites."""
         self._ensure_available()
-        source = self._path(path)
-        self._path(destination)
-        if not source.is_file():
-            raise ConflictError(f"Note disappeared: {path}")
-        operations = [TransactionOperation.move(path, destination)]
+        if not moves:
+            raise TransactionError("At least one move is required")
+        if len({source for source, _ in moves}) != len(moves):
+            raise TransactionError("A source may be moved only once per transaction")
+        if len({destination for _, destination in moves}) != len(moves):
+            raise CollisionError("Two moves target the same destination")
+        operations = []
+        for path, destination in moves:
+            source = self._path(path)
+            self._path(destination)
+            if not source.is_file():
+                raise ConflictError(f"Note disappeared: {path}")
+            operations.append(TransactionOperation.move(path, destination))
         ambiguous: set[str] = set()
+        destination_by_source = dict(moves)
         for candidate in scan_markdown_files(self.root):
             source_path = candidate.relative_to(self.root).as_posix()
             content, _ = self.safe._read(candidate)
-            updated, count, ambiguous_count = rewrite_explicit_links(
-                content, source_path, path, destination
-            )
-            if ambiguous_count:
-                ambiguous.add(source_path)
-            if count:
-                output_path = destination if source_path == path else source_path
+            if "[[" not in content:
+                continue
+            updated = content
+            changed = False
+            for path, destination in moves:
+                if PurePosixPath(path).stem not in updated:
+                    continue
+                updated, count, ambiguous_count = rewrite_explicit_links(
+                    updated, source_path, path, destination
+                )
+                changed |= bool(count)
+                if ambiguous_count:
+                    ambiguous.add(source_path)
+            if changed:
+                output_path = destination_by_source.get(source_path, source_path)
                 operations.append(TransactionOperation(
                     "rewrite_backlinks", output_path, old=content, new=updated,
                 ))
+        operations.extend(extra_operations)
         plan = self.plan(operations)
         return TransactionPlan(
             plan.vault_root, plan.operations, plan.changes, plan.originals,

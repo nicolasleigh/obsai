@@ -15,6 +15,7 @@ def test_defaults_do_not_create_config(tmp_path: Path) -> None:
     assert settings.embedding.model == "text-embedding-3-small"
     assert settings.embedding.batch_size == 64
     assert settings.ask.max_chunks == 6
+    assert settings.organize.inbox == "Inbox"
     assert not (tmp_path / "config").exists()
 
 
@@ -87,3 +88,13 @@ def test_ask_budget_configuration_and_validation(tmp_path: Path) -> None:
     config.write_text('[ask]\nmax_chunks = 0\n', encoding="utf-8")
     with pytest.raises(ConfigError, match="Invalid configuration"):
         load_settings(config)
+
+
+def test_organize_inbox_configuration_rejects_traversal(tmp_path: Path) -> None:
+    config = tmp_path / "config.toml"
+    config.write_text('[organize]\ninbox = "Capture"\n')
+    assert load_settings(config).organize.inbox == "Capture"
+    for invalid in ("../outside", "/absolute", "Inbox/../../outside"):
+        config.write_text(f'[organize]\ninbox = "{invalid}"\n')
+        with pytest.raises(ConfigError, match="Invalid configuration"):
+            load_settings(config)

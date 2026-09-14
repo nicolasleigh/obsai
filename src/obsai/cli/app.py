@@ -21,10 +21,12 @@ index_app = typer.Typer(help="Maintain the local derived index.", no_args_is_hel
 note_app = typer.Typer(help="Preview and approve safe single-note Vault changes.", no_args_is_help=True)
 transaction_app = typer.Typer(help="Inspect and recover Vault transactions.", no_args_is_help=True)
 agent_app = typer.Typer(help="Run or resume the bounded agent workflow.", no_args_is_help=True)
+organize_app = typer.Typer(help="Review and apply conservative Vault organization proposals.", no_args_is_help=True)
 app.add_typer(index_app, name="index")
 app.add_typer(note_app, name="note")
 app.add_typer(transaction_app, name="transaction")
 app.add_typer(agent_app, name="agent")
+app.add_typer(organize_app, name="organize")
 console = Console()
 error_console = Console(stderr=True)
 logger = logging.getLogger(__name__)
@@ -415,6 +417,123 @@ def _show_agent_result(thread_id: str, result: dict, artifacts) -> None:
         console.print(f"Approval required. Resume with: obsai agent resume {thread_id}")
     else:
         console.print(result.get("final_answer", "Agent stopped without an answer"), markup=False)
+
+
+def _organizer_diff(organizer, plan) -> None:
+    """Show a requested diff in pages; initial listing remains compact."""
+    from io import StringIO
+
+    output = StringIO()
+    preview_console = Console(file=output, width=100, force_terminal=False)
+    organizer.transaction.preview(plan, preview_console)
+    lines = output.getvalue().splitlines()
+    for start in range(0, len(lines), 200):
+        if start and not typer.confirm("Show the next 200 diff lines?", default=False):
+            console.print(f"Diff truncated after {start} of {len(lines)} lines")
+            break
+        console.print("\n".join(lines[start:start + 200]), markup=False)
+
+
+def _proposal_numbers(value: str, count: int) -> list[int]:
+    try:
+        numbers = [int(part.strip()) for part in value.split(",") if part.strip()]
+    except ValueError as exc:
+        raise typer.BadParameter("Use comma-separated proposal numbers") from exc
+    if not numbers or any(number < 1 or number > count for number in numbers):
+        raise typer.BadParameter("Choose valid proposal numbers")
+    return list(dict.fromkeys(numbers))
+
+
+@organize_app.command("inbox")
+def organize_inbox() -> None:
+    """Scan Inbox, propose conservative destinations, then request approval."""
+    from obsai.organizer import InboxOrganizer
+    from obsai.retrieval import FTSRetriever
+    from obsai.storage import Database, IndexRepository
+
+    settings = load_settings()
+    if settings.vault.path is None:
+        raise ConfigError("No vault configured; set vault.path in config.toml")
+    database_path = (settings.index.database or Path.home() / ".obsai" / "index.db").expanduser()
+    if not database_path.is_file():
+        raise ConfigError("Index does not exist; run 'obsai index update' first")
+    with Database(database_path) as database:
+        organizer = InboxOrganizer(settings.vault.path, database_path, IndexRepository(database),
+                                   FTSRetriever(database), inbox=settings.organize.inbox)
+        proposals = organizer.propose()
+        if not proposals:
+            console.print(f"{settings.organize.inbox} is empty")
+            return
+        default_numbers = [number for number, proposal in enumerate(proposals, start=1)
+                           if proposal.selected_by_default]
+        console.print(
+            f"Inbox proposals: {len(proposals)} note(s), {len(default_numbers)} default selected, "
+            f"{sum(bool(item.issue) for item in proposals)} conflict(s)"
+        )
+        shown_count = 0
+        for number, proposal in enumerate(proposals, start=1):
+            if number > 1 and (number - 1) % 20 == 0:
+                if not typer.confirm("Show the next 20 proposals?", default=False):
+                    console.print(f"{len(proposals) - shown_count} more proposal(s) hidden; use Select or View diff by number")
+                    break
+            marker = "*" if proposal.selected_by_default else " "
+            console.print(f"[{number}{marker}] {proposal.path}", markup=False)
+            console.print(f"  Move: {proposal.destination or 'Leave in Inbox'}", markup=False)
+            console.print(f"  Title: {proposal.title}", markup=False)
+            console.print(
+                "  Tags: " + (", ".join(f"+ #{tag}" for tag in proposal.add_tags) or "—"),
+                markup=False,
+            )
+            console.print(
+                "  Links: " + (", ".join(f"+ {link.wikilink}" for link in proposal.add_links) or "—"),
+                markup=False,
+            )
+            console.print(
+                f"  Affected backlinks: {len(proposal.affected_backlinks)}"
+                f"  Confidence: {proposal.confidence:.0%}", markup=False,
+            )
+            console.print(f"  Reason: {proposal.issue or proposal.reason}", markup=False)
+            shown_count += 1
+        console.print("* = included by Apply all; low-confidence and unsafe proposals stay unselected")
+        while True:
+            choice = typer.prompt("[a] Apply all  [s] Select  [v] View diff  [q] Cancel", default="q").strip().lower()
+            if choice == "q":
+                console.print("Cancelled")
+                return
+            if choice not in {"a", "s", "v"}:
+                console.print("Choose a, s, v, or q")
+                continue
+            if choice == "a":
+                numbers = default_numbers
+            else:
+                entered = typer.prompt(
+                    "Proposal numbers (comma-separated)",
+                    default=",".join(map(str, default_numbers)),
+                )
+                numbers = _proposal_numbers(entered, len(proposals))
+            if not numbers:
+                console.print("No safe proposals selected")
+                continue
+            plan = organizer.plan(proposals, numbers)
+            if choice == "v":
+                _organizer_diff(organizer, plan)
+                continue
+            console.print(f"One transaction: {len(numbers)} note(s), {len(plan.changes)} file change(s)")
+            if choice == "a" and shown_count < len(proposals) and not typer.confirm(
+                f"Apply {len(numbers)} default-selected notes, including proposals not displayed?",
+                default=False,
+            ):
+                console.print("Cancelled")
+                return
+            if choice == "s" and not typer.confirm("Apply selected changes?", default=False):
+                console.print("Cancelled")
+                return
+            result = organizer.apply(plan)
+            if result.committed:
+                console.print(f"Applied and verified {len(numbers)} note(s)")
+            if result.index_dirty:
+                error_console.print(f"Warning: {result.index_error}; run 'obsai index update'")
+            return
 
 
 def _safe_write_service():

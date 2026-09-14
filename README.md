@@ -323,3 +323,30 @@ rechecks source hashes and handles rollback and index failure as described above
 The CLI prints the workflow ID with each pending approval; pass `--thread-id`
 to `agent run` if you need a predetermined ID. Checkpoint resume survives a
 process restart as long as both agent SQLite files remain available.
+
+## Inbox organizer
+
+Run `obsai organize inbox` after `obsai index update`. By default it scans
+`Inbox/`; configure another existing Vault-relative directory with:
+
+```toml
+[organize]
+inbox = "Capture"
+```
+
+The organizer parses each note, searches indexed related notes, and proposes
+an existing destination directory, title-based filename, tags from related
+notes, and explicit WikiLinks to up to two related notes. It never creates a
+new classification directory. If related notes do not point clearly to one
+directory, the note stays in Inbox. A single weak keyword match gets low
+confidence and is not selected by default. Existing destinations and duplicate
+proposed filenames are marked as conflicts and cannot be applied.
+
+The initial screen is a compact proposal summary, including confidence,
+reason, and backlink count. Choose `a` to apply all default-selected proposals,
+`s` to select proposal numbers, `v` to inspect a diff in pages, or `q` to
+cancel. One apply selection becomes one Vault transaction. Moves conservatively
+rewrite explicit path backlinks; ambiguous links stay unchanged. Any preflight
+conflict or failed file operation stops or rolls back the entire selected batch.
+The command never changes Vault files before approval. Classification is local
+FTS-based in this version and therefore depends on a reasonably current index.

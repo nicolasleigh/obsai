@@ -8,7 +8,7 @@ from obsai.safe_write.models import FileChange
 
 @dataclass(frozen=True)
 class TransactionOperation:
-    kind: Literal["create", "replace", "frontmatter", "move", "trash", "rewrite_backlinks"]
+    kind: Literal["create", "replace", "append", "frontmatter", "move", "trash", "rewrite_backlinks"]
     path: str
     destination: str | None = None
     old: str | None = None
@@ -22,6 +22,10 @@ class TransactionOperation:
     @classmethod
     def replace(cls, path: str, old: str, new: str) -> "TransactionOperation":
         return cls("replace", path, old=old, new=new)
+
+    @classmethod
+    def append(cls, path: str, content: str) -> "TransactionOperation":
+        return cls("append", path, new=content)
 
     @classmethod
     def frontmatter(cls, path: str, updates: dict[str, Any]) -> "TransactionOperation":
