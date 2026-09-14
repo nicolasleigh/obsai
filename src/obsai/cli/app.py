@@ -18,7 +18,9 @@ from obsai.logging import configure_logging
 
 app = typer.Typer(help="ObsAgent command-line interface.", no_args_is_help=True)
 index_app = typer.Typer(help="Maintain the local derived index.", no_args_is_help=True)
+note_app = typer.Typer(help="Preview and approve safe single-note Vault changes.", no_args_is_help=True)
 app.add_typer(index_app, name="index")
+app.add_typer(note_app, name="note")
 console = Console()
 error_console = Console(stderr=True)
 logger = logging.getLogger(__name__)
@@ -286,6 +288,88 @@ def ask(
             if record.block_id:
                 location += f" ^{record.block_id}"
             console.print(f"[{source.citation_id}] {location}", markup=False)
+
+
+def _safe_write_service():
+    from obsai.safe_write import SafeWriteService
+
+    settings = load_settings()
+    if settings.vault.path is None:
+        raise ConfigError("No vault configured; set vault.path in config.toml")
+    return SafeWriteService(settings.vault.path)
+
+
+def _approve_change(service, change) -> None:
+    service.preview(change, console)
+    count = len(change.file.affected_backlinks)
+    question = (
+        f"Apply move with {count} affected backlink note(s)?"
+        if change.file.operation == "move" and count else "Apply this change?"
+    )
+    if not typer.confirm(question, default=False):
+        console.print("Cancelled")
+        return
+    service.apply(change, approved=True)
+    console.print("Applied")
+
+
+@note_app.command("create")
+def note_create(
+    path: Annotated[str, typer.Argument(help="Vault-relative .md path.")],
+    content: Annotated[str, typer.Option("--content", help="Initial Markdown content.")],
+) -> None:
+    """Preview and create one note."""
+    service = _safe_write_service()
+    _approve_change(service, service.create_note(path, content))
+
+
+@note_app.command("update")
+def note_update(
+    path: Annotated[str, typer.Argument(help="Vault-relative .md path.")],
+    old: Annotated[str, typer.Option("--old", help="Exact text to replace once.")],
+    new: Annotated[str, typer.Option("--new", help="Replacement text.")],
+) -> None:
+    """Preview one exact-span note edit."""
+    service = _safe_write_service()
+    _approve_change(service, service.update_note(path, old, new))
+
+
+@note_app.command("move")
+def note_move(
+    path: Annotated[str, typer.Argument(help="Existing Vault-relative .md path.")],
+    destination: Annotated[str, typer.Argument(help="New Vault-relative .md path.")],
+) -> None:
+    """Preview a move and report affected backlinks."""
+    service = _safe_write_service()
+    _approve_change(service, service.move_note(path, destination))
+
+
+@note_app.command("trash")
+def note_trash(path: Annotated[str, typer.Argument(help="Vault-relative .md path.")]) -> None:
+    """Preview moving one note to the recoverable Vault trash."""
+    service = _safe_write_service()
+    _approve_change(service, service.trash_note(path))
+
+
+@note_app.command("frontmatter")
+def note_frontmatter(
+    path: Annotated[str, typer.Argument(help="Vault-relative .md path.")],
+    set_values: Annotated[list[str], typer.Option("--set", help="Set key=value; repeatable.")],
+) -> None:
+    """Preview structured YAML frontmatter updates."""
+    import yaml
+
+    updates = {}
+    for item in set_values:
+        key, separator, value = item.partition("=")
+        if not separator or not key.strip():
+            raise typer.BadParameter("Use key=value", param_hint="--set")
+        parsed = yaml.safe_load(value)
+        if isinstance(parsed, (dict, list)):
+            raise typer.BadParameter("Use scalar frontmatter values", param_hint="--set")
+        updates[key.strip()] = parsed
+    service = _safe_write_service()
+    _approve_change(service, service.update_frontmatter(path, updates))
 
 
 def main() -> None:

@@ -14,6 +14,7 @@ uv run obsai search "context.WithTimeout" --mode keyword
 uv run obsai index embeddings
 uv run obsai search "服务怎么平滑退出？" --mode semantic
 uv run obsai ask "我以前如何理解 graceful shutdown？"
+uv run obsai note --help
 uv run pytest
 ```
 
@@ -232,3 +233,30 @@ Long evidence is visibly truncated. Citation checking verifies source IDs,
 not whether every natural-language claim faithfully paraphrases its source;
 the prompt requires grounded, cited answers. Tests replace the LLM adapter and
 make no remote calls. The Vault remains read-only.
+
+## Safe single-note writes
+
+All CLI note mutations go through `SafeWriteService`. `obsai note create`,
+`update`, `move`, `trash`, and `frontmatter` first print a Rich-colored unified
+diff and ask for yes/no approval; no is the default. `update` replaces one
+exact text span, and `frontmatter` changes the YAML header while preserving
+the Markdown body. To review an edit:
+
+```bash
+uv run obsai note create "Go/new.md" --content "# New note"
+uv run obsai note update "Go/context.md" --old "timeout: 5s" --new "timeout: 10s"
+uv run obsai note frontmatter "Go/context.md" --set status=done
+uv run obsai note move "Go/context.md" "Archive/context.md"
+uv run obsai note trash "Archive/context.md"
+```
+
+The service hashes the source at preparation and checks it again immediately
+before commit. Changed or disappeared sources raise `ConflictError`, and
+existing destinations raise `CollisionError`. Relative Markdown paths are
+confined to the configured Vault; symlinked components and traversal are
+rejected. Content updates use a flushed and fsynced temporary file in the
+same directory before replacement. Trash moves notes under the hidden
+`.obsai-trash/` directory instead of deleting them. Moves report potentially
+affected backlink notes from a fresh Vault scan; backlink rewrites are left
+for the later transaction phase. Run `obsai index update` after an approved
+change to refresh the derived SQLite index.

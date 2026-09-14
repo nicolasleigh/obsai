@@ -43,3 +43,19 @@ class ContextError(ObsAIError):
 
 class LLMError(ObsAIError):
     """The answer provider could not generate a response."""
+
+
+class SafeWriteError(ObsAIError):
+    """A proposed Vault edit is invalid or cannot be committed safely."""
+
+
+class ConflictError(SafeWriteError):
+    """The source changed or disappeared since the change was prepared."""
+
+
+class CollisionError(SafeWriteError):
+    """A destination already exists."""
+
+
+class InvalidEncodingError(SafeWriteError):
+    """A note is not valid UTF-8 text."""
