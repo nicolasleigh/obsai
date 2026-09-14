@@ -59,3 +59,11 @@ class CollisionError(SafeWriteError):
 
 class InvalidEncodingError(SafeWriteError):
     """A note is not valid UTF-8 text."""
+
+
+class TransactionError(SafeWriteError):
+    """A multi-file Vault transaction could not complete."""
+
+
+class RecoveryRequiredError(TransactionError):
+    """An unfinished journal requires explicit recovery before further writes."""

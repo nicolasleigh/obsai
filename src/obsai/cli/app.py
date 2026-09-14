@@ -19,8 +19,10 @@ from obsai.logging import configure_logging
 app = typer.Typer(help="ObsAgent command-line interface.", no_args_is_help=True)
 index_app = typer.Typer(help="Maintain the local derived index.", no_args_is_help=True)
 note_app = typer.Typer(help="Preview and approve safe single-note Vault changes.", no_args_is_help=True)
+transaction_app = typer.Typer(help="Inspect and recover Vault transactions.", no_args_is_help=True)
 app.add_typer(index_app, name="index")
 app.add_typer(note_app, name="note")
+app.add_typer(transaction_app, name="transaction")
 console = Console()
 error_console = Console(stderr=True)
 logger = logging.getLogger(__name__)
@@ -103,12 +105,37 @@ def version_callback(value: bool) -> None:
 
 @app.callback()
 def cli(
+    ctx: typer.Context,
     version: Annotated[
         bool,
         typer.Option("--version", callback=version_callback, is_eager=True, help="Show version and exit."),
     ] = False,
 ) -> None:
-    """Global CLI options."""
+    """Global CLI options and visible unfinished-journal notice."""
+    if ctx.invoked_subcommand is None:
+        return
+    from obsai.errors import RecoveryRequiredError
+    from obsai.transactions import TransactionService
+
+    settings = load_settings()
+    if settings.vault.path is None or not settings.vault.path.expanduser().is_dir():
+        return
+    try:
+        journals = TransactionService.journals(settings.vault.path)
+    except RecoveryRequiredError as exc:
+        error_console.print(f"Recovery required: {exc}")
+        return
+    for journal in journals:
+        if journal["status"] in ("prepared", "applying", "rolling_back", "recovery_required"):
+            error_console.print(
+                f"Recovery required: transaction {journal['id']} is {journal['status']}; "
+                f"run 'obsai transaction recover {journal['id']}'"
+            )
+        elif journal["status"] in ("committed", "index_dirty"):
+            error_console.print(
+                f"Index recovery required: transaction {journal['id']} is {journal['status']}; "
+                "run 'obsai index update'"
+            )
 
 
 @app.command()
@@ -127,17 +154,21 @@ def index_update() -> None:
     """Synchronize changed Vault notes into the SQLite metadata index."""
     from obsai.indexing import IncrementalIndexer
     from obsai.storage import Database, IndexRepository
+    from obsai.transactions import TransactionService
 
     settings = load_settings()
     if settings.vault.path is None:
         raise ConfigError("No vault configured; set vault.path in config.toml")
     vault = settings.vault.path.expanduser()
+    transaction_service = TransactionService(vault)
+    transaction_service.ensure_ready()
     database_path = (
         settings.index.database or Path.home() / ".obsai" / "index.db"
     ).expanduser()
     database_path.parent.mkdir(parents=True, exist_ok=True)
     with Database(database_path) as database:
         result = IncrementalIndexer(IndexRepository(database)).update(vault)
+    TransactionService(vault, database_path=database_path).clear_index_dirty()
 
     for label, kind in (
         ("Created", "created"),
@@ -292,10 +323,12 @@ def ask(
 
 def _safe_write_service():
     from obsai.safe_write import SafeWriteService
+    from obsai.transactions import TransactionService
 
     settings = load_settings()
     if settings.vault.path is None:
         raise ConfigError("No vault configured; set vault.path in config.toml")
+    TransactionService(settings.vault.path).ensure_ready()
     return SafeWriteService(settings.vault.path)
 
 
@@ -339,9 +372,26 @@ def note_move(
     path: Annotated[str, typer.Argument(help="Existing Vault-relative .md path.")],
     destination: Annotated[str, typer.Argument(help="New Vault-relative .md path.")],
 ) -> None:
-    """Preview a move and report affected backlinks."""
-    service = _safe_write_service()
-    _approve_change(service, service.move_note(path, destination))
+    """Preview an atomic batch move with explicit-path backlink rewrites."""
+    from obsai.transactions import TransactionService
+
+    settings = load_settings()
+    if settings.vault.path is None:
+        raise ConfigError("No vault configured; set vault.path in config.toml")
+    database_path = (
+        settings.index.database or Path.home() / ".obsai" / "index.db"
+    ).expanduser()
+    service = TransactionService(settings.vault.path, database_path=database_path)
+    plan = service.plan_move_with_backlinks(path, destination)
+    service.preview(plan, console)
+    affected = len({p for change in plan.changes for p in change.affected_backlinks})
+    if not typer.confirm(f"Apply move with {affected} affected backlink note(s)?", default=False):
+        console.print("Cancelled")
+        return
+    result = service.execute(plan, approved=True)
+    console.print("Applied")
+    if result.index_dirty:
+        error_console.print(f"Warning: {result.index_error}; run 'obsai index update'")
 
 
 @note_app.command("trash")
@@ -370,6 +420,51 @@ def note_frontmatter(
         updates[key.strip()] = parsed
     service = _safe_write_service()
     _approve_change(service, service.update_frontmatter(path, updates))
+
+
+@transaction_app.command("status")
+def transaction_status() -> None:
+    """Show pending recovery and index-dirty transaction journals."""
+    from obsai.transactions import TransactionService
+
+    settings = load_settings()
+    if settings.vault.path is None:
+        raise ConfigError("No vault configured; set vault.path in config.toml")
+    journals = TransactionService.journals(settings.vault.path)
+    if not journals:
+        console.print("No unfinished transactions")
+    for journal in journals:
+        console.print(f"{journal['id']}: {journal['status']}")
+        for item in journal.get("originals", []):
+            console.print(f"  {item['path']}", markup=False)
+
+
+@transaction_app.command("recover")
+def transaction_recover(
+    transaction_id: Annotated[str, typer.Argument(help="Transaction ID from status.")],
+) -> None:
+    """Inspect a journal and confirm restoring its original Vault bytes."""
+    from obsai.transactions import TransactionService
+    from obsai.transactions.journal import TransactionJournal, UNFINISHED
+    from obsai.errors import TransactionError
+
+    settings = load_settings()
+    if settings.vault.path is None:
+        raise ConfigError("No vault configured; set vault.path in config.toml")
+    service = TransactionService(settings.vault.path)
+    journal = TransactionJournal.load(service.root, transaction_id)
+    console.print(f"Transaction {transaction_id}: {journal.data['status']}")
+    if journal.data["status"] not in UNFINISHED:
+        raise TransactionError("Vault transaction is committed; run 'obsai index update' to reconcile the index")
+    console.print(f"Journal and backups: {journal.directory}", markup=False)
+    for item in journal.data["originals"]:
+        console.print(f"  {item['path']} (snapshot: {item['snapshot'] or 'absent'})", markup=False)
+    service.preview_recovery(transaction_id, console)
+    if not typer.confirm("Restore original Vault files from this journal?", default=False):
+        console.print("Cancelled")
+        return
+    service.recover(transaction_id, approved=True)
+    console.print("Recovered")
 
 
 def main() -> None:

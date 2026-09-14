@@ -41,6 +41,36 @@ def _sync_directory(path: Path) -> None:
         pass
 
 
+def patch_frontmatter(content: str, updates: Mapping[str, Any]) -> str:
+    """Rewrite only the YAML header; preserve the body verbatim."""
+    if not updates or any(not isinstance(key, str) or not key for key in updates):
+        raise SafeWriteError("Frontmatter updates require nonempty string keys")
+    lines = content.splitlines(keepends=True)
+    body = content
+    metadata: dict[str, Any] = {}
+    if lines and lines[0].strip() == "---":
+        end = next((i for i in range(1, len(lines)) if lines[i].strip() in ("---", "...")), None)
+        if end is None:
+            raise SafeWriteError("Unclosed YAML frontmatter")
+        try:
+            loaded = yaml.safe_load("".join(lines[1:end]))
+        except yaml.YAMLError as exc:
+            raise SafeWriteError(f"Invalid YAML frontmatter: {exc}") from exc
+        if loaded is not None:
+            if not isinstance(loaded, dict) or any(not isinstance(key, str) for key in loaded):
+                raise SafeWriteError("Frontmatter must be a mapping with string keys")
+            metadata = loaded
+        body = "".join(lines[end + 1 :])
+    metadata.update(updates)
+    try:
+        header = yaml.safe_dump(metadata, allow_unicode=True, sort_keys=False)
+    except yaml.YAMLError as exc:
+        raise SafeWriteError(f"Cannot serialize frontmatter: {exc}") from exc
+    updated = f"---\n{header}---\n{body}"
+    _encode(updated)
+    return updated
+
+
 class SafeWriteService:
     def __init__(self, vault_root: Path):
         try:
@@ -58,8 +88,8 @@ class SafeWriteService:
             raise SafeWriteError(f"Path escapes or is not relative to the Vault: {relative}")
         if candidate.suffix.lower() != ".md":
             raise SafeWriteError("Only Markdown .md notes may be changed")
-        if not internal and candidate.parts[0] == ".obsai-trash":
-            raise SafeWriteError("The Vault trash directory is reserved")
+        if not internal and candidate.parts[0] in (".obsai-trash", ".obsai-transactions"):
+            raise SafeWriteError("The Vault internal directory is reserved")
         path = self.root.joinpath(*candidate.parts)
         cursor = self.root
         for part in candidate.parts:
@@ -112,32 +142,7 @@ class SafeWriteService:
     def update_frontmatter(self, path: str, updates: Mapping[str, Any]) -> ChangeSet:
         target = self._path(path)
         content, original_hash = self._read(target)
-        if not updates or any(not isinstance(key, str) or not key for key in updates):
-            raise SafeWriteError("Frontmatter updates require nonempty string keys")
-        lines = content.splitlines(keepends=True)
-        end = None
-        body = content
-        metadata: dict[str, Any] = {}
-        if lines and lines[0].strip() == "---":
-            end = next((i for i in range(1, len(lines)) if lines[i].strip() in ("---", "...")), None)
-            if end is None:
-                raise SafeWriteError("Unclosed YAML frontmatter")
-            try:
-                loaded = yaml.safe_load("".join(lines[1:end]))
-            except yaml.YAMLError as exc:
-                raise SafeWriteError(f"Invalid YAML frontmatter: {exc}") from exc
-            if loaded is not None:
-                if not isinstance(loaded, dict) or any(not isinstance(key, str) for key in loaded):
-                    raise SafeWriteError("Frontmatter must be a mapping with string keys")
-                metadata = loaded
-            body = "".join(lines[end + 1 :])
-        metadata.update(updates)
-        try:
-            header = yaml.safe_dump(metadata, allow_unicode=True, sort_keys=False)
-        except yaml.YAMLError as exc:
-            raise SafeWriteError(f"Cannot serialize frontmatter: {exc}") from exc
-        updated = f"---\n{header}---\n{body}"
-        _encode(updated)
+        updated = patch_frontmatter(content, updates)
         return ChangeSet(FileChange("frontmatter", path, None, original_hash, content, updated))
 
     def _backlink_impact(self, path: str) -> tuple[str, ...]:

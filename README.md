@@ -236,7 +236,8 @@ make no remote calls. The Vault remains read-only.
 
 ## Safe single-note writes
 
-All CLI note mutations go through `SafeWriteService`. `obsai note create`,
+All CLI note mutations go through `SafeWriteService`, directly or through
+`TransactionService`. `obsai note create`,
 `update`, `move`, `trash`, and `frontmatter` first print a Rich-colored unified
 diff and ask for yes/no approval; no is the default. `update` replaces one
 exact text span, and `frontmatter` changes the YAML header while preserving
@@ -256,7 +257,43 @@ existing destinations raise `CollisionError`. Relative Markdown paths are
 confined to the configured Vault; symlinked components and traversal are
 rejected. Content updates use a flushed and fsynced temporary file in the
 same directory before replacement. Trash moves notes under the hidden
-`.obsai-trash/` directory instead of deleting them. Moves report potentially
-affected backlink notes from a fresh Vault scan; backlink rewrites are left
-for the later transaction phase. Run `obsai index update` after an approved
-change to refresh the derived SQLite index.
+`.obsai-trash/` directory instead of deleting them. Run `obsai index update`
+after a single-note create, update, trash, or frontmatter change to refresh
+the derived SQLite index.
+
+## Multi-file transactions and recovery
+
+`TransactionService.plan([...])` simulates a batch of create, exact replacement,
+frontmatter, move, and trash operations without writing. `preflight` checks
+every original hash, path, destination, required permission, device, and free
+space before snapshots or edits begin. After approval, the service writes
+short-lived byte snapshots and a durable journal under `.obsai-transactions/`,
+applies each change through `SafeWriteService`, verifies the final files, and
+rolls back applied changes if a file operation fails.
+
+```python
+from obsai.transactions import TransactionOperation as Op, TransactionService
+
+service = TransactionService(vault_path, database_path=index_path)
+plan = service.plan([
+    Op.move("Go/context.md", "Archive/context.md"),
+    Op.frontmatter("Archive/context.md", {"status": "archived"}),
+    Op.replace("Go/guide.md", "old wording", "new wording"),
+])
+service.preview(plan, console)
+result = service.execute(plan, approved=True)
+```
+
+`obsai note move` uses this transaction path. It rewrites only parser-confirmed
+WikiLinks with an explicit vault-root path, such as `[[Go/context#Heading|Alias]]`.
+Basename-only links such as `[[context]]`, mixed code/text lines, and other
+uncertain targets stay unchanged and are reported. A successful Vault commit
+followed by a failed index update is **not** rolled back: the journal records
+`index_dirty`, and the SQLite repository marks affected paths dirty when it is
+available. `obsai index update` reconciles and clears that state.
+
+An interrupted run leaves a journal. The CLI warns on the next invocation;
+new writes and reindexing are blocked until recovery. Use
+`obsai transaction status` to inspect affected paths and
+`obsai transaction recover ID` to preview a diff and confirm rollback from snapshots. Recovery
+refuses to overwrite files that no longer match a known transaction state.
