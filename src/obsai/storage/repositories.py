@@ -358,19 +358,21 @@ class IndexRepository:
                 return record.id
         return None
 
-    def reconcile_links(self) -> None:
-        """Resolve links whose target was indexed after their source."""
+    def reconcile_links(self, *, full: bool = False) -> None:
+        """Resolve new links; optionally recheck old resolutions after path changes."""
         with self.db.transaction() as connection:
             rows = connection.execute(
-                """SELECT links.id, links.source_note_id, links.target_path, notes.path AS source_path
+                """SELECT links.id, links.source_note_id, links.target_path,
+                          links.target_note_id, notes.path AS source_path
                    FROM links JOIN notes ON notes.id = links.source_note_id
-                   WHERE links.target_note_id IS NULL"""
+                   WHERE ? OR links.target_note_id IS NULL""",
+                (int(full),),
             ).fetchall()
             for row in rows:
                 target_id = self._target_id(
                     row["source_note_id"], row["source_path"], row["target_path"]
                 )
-                if target_id is not None:
+                if target_id != row["target_note_id"]:
                     connection.execute(
                         "UPDATE links SET target_note_id = ? WHERE id = ?",
                         (target_id, row["id"]),

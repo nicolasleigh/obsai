@@ -139,6 +139,6 @@ class IncrementalIndexer:
                     parsed, chunk_note(parsed), reconcile=False
                 )
                 changes.append(FileChange("created", path, note_id=note_id))
-            self.repository.reconcile_links()
+            self.repository.reconcile_links(full=bool(moves or disappeared or new_hashes))
             self.repository.set_state("last_update", datetime.now(timezone.utc).isoformat())
         return UpdateResult(tuple(sorted(changes, key=lambda item: (item.path, item.kind))))

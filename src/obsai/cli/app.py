@@ -22,11 +22,13 @@ note_app = typer.Typer(help="Preview and approve safe single-note Vault changes.
 transaction_app = typer.Typer(help="Inspect and recover Vault transactions.", no_args_is_help=True)
 agent_app = typer.Typer(help="Run or resume the bounded agent workflow.", no_args_is_help=True)
 organize_app = typer.Typer(help="Review and apply conservative Vault organization proposals.", no_args_is_help=True)
+links_app = typer.Typer(help="Inspect WikiLink graph and suggest related notes.", no_args_is_help=True)
 app.add_typer(index_app, name="index")
 app.add_typer(note_app, name="note")
 app.add_typer(transaction_app, name="transaction")
 app.add_typer(agent_app, name="agent")
 app.add_typer(organize_app, name="organize")
+app.add_typer(links_app, name="links")
 console = Console()
 error_console = Console(stderr=True)
 logger = logging.getLogger(__name__)
@@ -53,7 +55,7 @@ def _semantic_retriever(database, query: str, *, strict: bool = False):
     from obsai.retrieval import VectorRetriever
 
     semantic = None
-    reason = "Semantic index missing; run 'obsai index embeddings'; using keyword results"
+    reason = "Semantic index missing; run 'obsai index embeddings'"
     try:
         store, pipeline = _embedding_pipeline(database)
         if store.has_generation(pipeline.generation) and query.strip():
@@ -64,14 +66,11 @@ def _semantic_retriever(database, query: str, *, strict: bool = False):
             if typer.confirm("Send search query for remote embedding?", default=False, err=True):
                 semantic = VectorRetriever(store, pipeline, approved=True)
             else:
-                reason = "Semantic query was not approved; using keyword results"
+                reason = "Semantic query was not approved"
     except Exception as exc:
         if strict:
             raise
-        reason = (
-            f"Semantic backend unavailable ({type(exc).__name__}: {exc}); "
-            "using keyword results"
-        )
+        reason = f"Semantic backend unavailable ({type(exc).__name__}: {exc})"
     return semantic, reason
 
 
@@ -219,7 +218,7 @@ def index_embeddings() -> None:
 @app.command()
 def search(
     query: Annotated[str, typer.Argument(help="Search text or natural-language question.")],
-    mode: Annotated[str, typer.Option("--mode", help="Search mode: hybrid, keyword, or semantic.")] = "hybrid",
+    mode: Annotated[str, typer.Option("--mode", help="Search mode: hybrid, keyword, semantic, or graph.")] = "hybrid",
     limit: Annotated[int, typer.Option("--limit", min=1, help="Maximum results.")] = 10,
     tag: Annotated[list[str] | None, typer.Option("--tag", help="Require a tag; repeatable.")] = None,
     folder: Annotated[str | None, typer.Option("--folder", help="Vault folder prefix.")] = None,
@@ -230,12 +229,12 @@ def search(
     strict_semantic: Annotated[bool, typer.Option("--strict-semantic", help="Fail if semantic retrieval is unavailable.")] = False,
     json_output: Annotated[bool, typer.Option("--json", help="Print structured JSON.")] = False,
 ) -> None:
-    """Search the local hybrid, keyword, or semantic index."""
+    """Search the local hybrid, keyword, semantic, or graph-expanded index."""
     from obsai.retrieval import FTSRetriever, HybridRetriever, SearchFilters
     from obsai.storage import Database
 
-    if mode not in ("hybrid", "keyword", "semantic"):
-        raise typer.BadParameter("Use hybrid, keyword, or semantic", param_hint="--mode")
+    if mode not in ("hybrid", "keyword", "semantic", "graph"):
+        raise typer.BadParameter("Use hybrid, keyword, semantic, or graph", param_hint="--mode")
     settings = load_settings()
     database_path = (
         settings.index.database or Path.home() / ".obsai" / "index.db"
@@ -263,7 +262,7 @@ def search(
                 if semantic is None:
                     raise ConfigError(reason)
                 results = semantic.search(query, limit=limit, filters=filters)
-            else:
+            elif mode == "hybrid":
                 hybrid = HybridRetriever(
                     FTSRetriever(database), semantic,
                     on_semantic_failure="strict" if strict_semantic else "warn",
@@ -272,6 +271,22 @@ def search(
                 outcome = hybrid.search_with_status(query, limit=limit, filters=filters)
                 results = list(outcome.results)
                 for warning in outcome.warnings:
+                    error_console.print(f"Warning: {warning}")
+            else:
+                from obsai.graph import GraphRepository, GraphService
+                from obsai.retrieval import GraphRetriever
+                from obsai.storage import IndexRepository
+
+                hybrid = HybridRetriever(
+                    FTSRetriever(database), semantic,
+                    on_semantic_failure="strict" if strict_semantic else "warn",
+                    semantic_unavailable_reason=reason,
+                )
+                repository = IndexRepository(database)
+                graph = GraphService(repository, GraphRepository(database))
+                retriever = GraphRetriever(hybrid, graph, repository)
+                results = retriever.search(query, limit=limit, filters=filters)
+                for warning in retriever.last_warnings:
                     error_console.print(f"Warning: {warning}")
     if json_output:
         typer.echo(json.dumps([result.model_dump() for result in results], ensure_ascii=False, indent=2))
@@ -442,6 +457,133 @@ def _proposal_numbers(value: str, count: int) -> list[int]:
     if not numbers or any(number < 1 or number > count for number in numbers):
         raise typer.BadParameter("Choose valid proposal numbers")
     return list(dict.fromkeys(numbers))
+
+
+def _links_database_path() -> Path:
+    settings = load_settings()
+    database_path = (settings.index.database or Path.home() / ".obsai" / "index.db").expanduser()
+    if not database_path.is_file():
+        raise ConfigError("Index does not exist; run 'obsai index update' first")
+    return database_path
+
+
+@links_app.command("backlinks")
+def links_backlinks(note: Annotated[str, typer.Argument(help="Indexed note path or ID.")]) -> None:
+    """Show resolved inbound WikiLinks, including heading and block targets."""
+    from obsai.graph import GraphRepository, GraphService
+    from obsai.storage import Database, IndexRepository
+
+    with Database(_links_database_path()) as database:
+        graph = GraphService(IndexRepository(database), GraphRepository(database))
+        links = graph.get_backlinks(note)
+        for edge in links:
+            target = edge.target_path or "(this note)"
+            fragment = f"#^{edge.target_block_id}" if edge.target_block_id else (
+                f"#{edge.target_heading}" if edge.target_heading else ""
+            )
+            console.print(f"{edge.source_path} → {target}{fragment}", markup=False)
+        if not links:
+            console.print("No backlinks")
+
+
+@links_app.command("outgoing")
+def links_outgoing(note: Annotated[str, typer.Argument(help="Indexed note path or ID.")]) -> None:
+    """Show outbound WikiLinks and visibly mark unresolved targets."""
+    from obsai.graph import GraphRepository, GraphService
+    from obsai.storage import Database, IndexRepository
+
+    with Database(_links_database_path()) as database:
+        graph = GraphService(IndexRepository(database), GraphRepository(database))
+        links = graph.get_outgoing_links(note)
+        for edge in links:
+            target = edge.target_path or "(this note)"
+            fragment = f"#^{edge.target_block_id}" if edge.target_block_id else (
+                f"#{edge.target_heading}" if edge.target_heading else ""
+            )
+            status = " [unresolved]" if edge.broken else ""
+            console.print(f"{target}{fragment}{status}", markup=False)
+        if not links:
+            console.print("No outgoing links")
+
+
+@links_app.command("related")
+def links_related(
+    note: Annotated[str, typer.Argument(help="Indexed note path or ID.")],
+    depth: Annotated[int, typer.Option("--depth", min=0, max=2)] = 2,
+    max_nodes: Annotated[int, typer.Option("--max-nodes", min=1)] = 50,
+    max_edges: Annotated[int, typer.Option("--max-edges", min=0)] = 200,
+) -> None:
+    """Explore bidirectional WikiLink neighbors under explicit graph limits."""
+    from obsai.graph import GraphLimits, GraphRepository, GraphService
+    from obsai.storage import Database, IndexRepository
+
+    with Database(_links_database_path()) as database:
+        graph = GraphService(
+            IndexRepository(database), GraphRepository(database),
+            limits=GraphLimits(max_depth=2, max_nodes=max_nodes, max_edges=max_edges),
+        )
+        neighborhood = graph.get_neighbors(note, depth=depth)
+        for node in neighborhood.nodes:
+            console.print(f"Depth {node.distance}: {node.path} ({node.title})", markup=False)
+        if neighborhood.truncated:
+            console.print("Graph limit reached; results truncated")
+
+
+@links_app.command("suggest")
+def links_suggest(
+    path: Annotated[str, typer.Argument(help="Vault-relative Markdown note path.")],
+    limit: Annotated[int, typer.Option("--limit", min=1)] = 10,
+    apply: Annotated[bool, typer.Option("--apply", help="Select, preview, and confirm links to append.")] = False,
+) -> None:
+    """Suggest semantic and graph-related notes without writing by default."""
+    from obsai.graph import GraphRepository, GraphService, LinkSuggester
+    from obsai.errors import ConflictError
+    from obsai.safe_write import SafeWriteService
+    from obsai.storage import Database, IndexRepository
+    from obsai.transactions import TransactionOperation, TransactionService
+    from obsai.vault.parser import parse_note
+
+    settings = load_settings()
+    if settings.vault.path is None:
+        raise ConfigError("No vault configured; set vault.path in config.toml")
+    database_path = _links_database_path()
+    vault = settings.vault.path.expanduser()
+    with Database(database_path) as database:
+        safe = SafeWriteService(vault)
+        parsed = parse_note(safe._path(path), vault_root=safe.root)
+        query = (parsed.title + "\n" + parsed.plain_text[:2000]).strip()
+        semantic, reason = _semantic_retriever(database, query, strict=True)
+        if semantic is None:
+            raise ConfigError(reason)
+        if parse_note(safe._path(path), vault_root=safe.root).raw_content != parsed.raw_content:
+            raise ConflictError("Note changed while preparing link suggestions; rerun the command")
+        repository = IndexRepository(database)
+        graph = GraphService(repository, GraphRepository(database))
+        suggestions = LinkSuggester(vault, repository, graph, semantic).suggest(path, limit=limit)
+        if not suggestions:
+            console.print("No new link suggestions")
+            return
+        for number, item in enumerate(suggestions, start=1):
+            console.print(f"[{number}] {item.wikilink}  {item.title}  score={item.score:.3f}", markup=False)
+            console.print(f"    {item.reason}", markup=False)
+        if not apply:
+            return
+        selected = _proposal_numbers(typer.prompt("Suggestion numbers (comma-separated)"), len(suggestions))
+        if parse_note(safe._path(path), vault_root=safe.root).raw_content != parsed.raw_content:
+            raise ConflictError("Note changed since suggestions were shown; rerun the command")
+        suffix = "\n\nRelated:\n" + "".join(
+            f"- {suggestions[number - 1].wikilink}\n" for number in selected
+        )
+        transaction = TransactionService(vault, database_path=database_path)
+        plan = transaction.plan([TransactionOperation.append(path, suffix)])
+        transaction.preview(plan, console)
+        if not typer.confirm("Apply selected links?", default=False):
+            console.print("Cancelled")
+            return
+        result = transaction.execute(plan, approved=True)
+        console.print("Applied" if result.committed else "Cancelled")
+        if result.index_dirty:
+            error_console.print(f"Warning: {result.index_error}; run 'obsai index update'")
 
 
 @organize_app.command("inbox")

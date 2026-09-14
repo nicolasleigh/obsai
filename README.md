@@ -350,3 +350,32 @@ rewrite explicit path backlinks; ambiguous links stay unchanged. Any preflight
 conflict or failed file operation stops or rolls back the entire selected batch.
 The command never changes Vault files before approval. Classification is local
 FTS-based in this version and therefore depends on a reasonably current index.
+
+## WikiLink graph and link suggestions
+
+The graph is derived from the existing SQLite `links` rows; it adds no graph
+database. `GraphService.get_outgoing_links`, `get_backlinks`, and `get_neighbors`
+preserve heading and block targets. Unresolved links remain visible as broken
+outgoing edges but do not create neighbor nodes. Traversal is bidirectional,
+cycle-safe, and defaults to depth 2, at most 50 nodes and 200 edges.
+
+```bash
+obsai links outgoing Go/context.md
+obsai links backlinks Go/context.md
+obsai links related Go/context.md --depth 2
+obsai search "graceful shutdown" --mode graph
+obsai links suggest Go/context.md
+```
+
+Graph search uses the existing hybrid retriever for seed notes, then adds
+bounded WikiLink neighbors and selects a relevant Chunk for each. Metadata
+filters also apply to expanded notes. Semantic failure in graph search follows
+the existing visible hybrid degradation policy; `--strict-semantic` makes it an
+error. Link suggestions require an available vector generation and explicit
+approval before sending the note query to the embedding provider. They exclude
+existing outgoing links and rank semantic matches with graph proximity.
+
+`links suggest` is read-only by default. `--apply` asks for suggestion numbers,
+shows a transaction diff, and requires a final yes/no confirmation before
+appending selected WikiLinks through the safe transaction service. Graph
+results reflect the last index update, so reindex after external Vault edits.
