@@ -5,7 +5,7 @@ import os
 from openai import APIConnectionError, APIStatusError, APITimeoutError, AsyncOpenAI
 
 from obsai.config.models import AskConfig
-from obsai.errors import ConfigError, LLMError
+from obsai.errors import ConfigError, LLMError, MissingCredentialError
 
 
 class OpenAILLMProvider:
@@ -19,7 +19,10 @@ class OpenAILLMProvider:
     ) -> str:
         key = os.environ.get("OPENAI_API_KEY")
         if not key:
-            raise ConfigError("OPENAI_API_KEY is required for remote answers")
+            # Not a plain ConfigError: the configuration is fine, the environment
+            # is not. The UI needs to tell those two apart to give the right
+            # instruction. See MissingCredentialError.
+            raise MissingCredentialError("OPENAI_API_KEY is required for remote answers")
         try:
             async with AsyncOpenAI(
                 api_key=key, timeout=self.config.timeout_seconds, max_retries=0

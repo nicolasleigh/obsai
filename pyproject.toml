@@ -15,6 +15,9 @@ dependencies = [
     "openai>=1.0,<3",
     "langgraph>=1,<2",
     "langgraph-checkpoint-sqlite>=2,<4",
+    "fastapi>=0.115,<1",
+    "uvicorn>=0.32,<1",
+    "sse-starlette>=2,<3",
 ]
 
 [project.scripts]
