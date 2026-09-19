@@ -1,11 +1,35 @@
-"""Preflighted, journaled multi-file Vault changes with rollback and recovery."""
+"""带预检、预写日志（WAL）、两阶段提交与灾难恢复的多文件知识库事务引擎。
+
+核心设计哲学与技术架构：
+1. 完备的多文件预检与两阶段提交协议（Preflighted Two-Phase Commit Protocol）：
+   - 规划阶段（Plan）：在内存中完全推导所有文件的虚拟演变状态，校验待变更文件存在性、哈希唯一性、路径冲突；
+   - 预检阶段（Preflight）：在物理写前严格核验当前磁盘哈希（OCC 防脏写）、读写执行权限、剩余磁盘空间，
+     并强制检查是否存在跨物理设备分区移动（Cross-Device Move 防御）；
+   - 执行阶段（Execute）：基于 WAL 日志分步原子应用，每一步精准记录 `applied_count`；
+   - 提交阶段（Commit）：校验最终所有文件的终态内容，更新日志为 `committed`。
+2. 物理写入与衍生索引持久性解耦（Decoupled Physical vs. Index Durability）：
+   用户知识库中的真实 Markdown 物理文件拥有最高等级的真实性。
+   一旦物理文件全部成功提交，即便后续 SQLite 索引或向量化更新发生任何异常（如数据库锁死、断电），
+   事务引擎绝不会反向销毁物理文件，而是将状态标记为 `index_dirty`，交由后台增量补偿任务异步修复。
+3. 停机信号感知与写保全（Graceful Shutdown Awareness）：
+   通过 `check_shutdown()` 并在关键落盘与状态更新区使用 `with defer_shutdown():` 延迟退出信号，
+   杜绝进程在中间状态被 SIGINT / SIGTERM 强行杀死而留下难以清理的半写残局。
+4. 字节级与权限级无损回滚（Byte & Permission Fidelity Rollback）：
+   回滚不仅能够通过预写快照将正文恢复至初始字节流，还能精准还原文件的 POSIX 权限模式（st_mode），
+   并自动递归清理事务过程中新建的空父目录（`absent_directories`）。
+5. 灾难推演与自愈恢复（State Matching & Disaster Recovery via _recovery_state）：
+   若系统在物理写入中途遭遇断电崩溃，重启后 `recover` 能够遍历所有可能的执行步数，
+   自动推导磁盘当前状态停留在哪一步，并安全反向补偿还原。
+6. 结构化差异行与全端视觉还原（Byte-for-Byte Visual Determinism via PreviewLine）：
+   通过 `plan_preview_lines` 与 `recovery_preview_lines` 将 Diff 计算与 Rich 终端解耦，
+   使 Web API、GUI 前端与命令行能够 100% 保持一致的高保真彩色呈现。
+"""
 
 import difflib
 import os
 import shutil
 import stat
-from pathlib import Path
-from pathlib import PurePosixPath
+from pathlib import Path, PurePosixPath
 from uuid import uuid4
 from typing import Callable, Sequence
 
@@ -15,20 +39,80 @@ from obsai.errors import (
     CollisionError, ConflictError, RecoveryRequiredError, SafeWriteError,
     TransactionError,
 )
-from obsai.safe_write.models import ChangeSet, FileChange
-from obsai.safe_write.service import SafeWriteService, _encode, _hash, _sync_directory, patch_frontmatter
+from obsai.safe_write.models import ChangeSet, FileChange, PreviewLine
+from obsai.safe_write.service import (
+    SafeWriteService, _encode, _hash, _sync_directory, change_preview_lines, patch_frontmatter,
+)
 from obsai.transactions.backlinks import rewrite_explicit_links
 from obsai.transactions.journal import TransactionJournal, UNFINISHED, journal_base, list_journals
 from obsai.transactions.models import TransactionOperation, TransactionPlan, TransactionResult
 from obsai.vault.scanner import scan_markdown_files
-from obsai.shutdown import ShutdownRequested, check_shutdown, defer_shutdown
+from obsai.shutdown import check_shutdown, defer_shutdown, is_process_stop
+
+
+def plan_preview_lines(plan: TransactionPlan) -> list[PreviewLine]:
+    """为整场事务方案生成统一的结构化差异预览行列表。
+
+    遍历方案中的全部物理变更提案，将 Diff 格式化为携带 Rich 样式提示的 PreviewLine 对象；
+    若包含被保守跳过的模糊短双链（ambiguous_backlinks），追加黄色提示行。
+    """
+    lines: list[PreviewLine] = []
+    for change in plan.changes:
+        lines.extend(change_preview_lines(ChangeSet(change)))
+    if plan.ambiguous_backlinks:
+        lines.append(PreviewLine("Ambiguous WikiLinks left unchanged in:", "yellow"))
+        lines.extend(PreviewLine(f"  {path}") for path in plan.ambiguous_backlinks)
+    return lines
+
+
+def recovery_preview_lines(service: "TransactionService", transaction_id: str) -> list[PreviewLine]:
+    """生成从“当前实际磁盘状态”向“崩溃前快照原始状态”回滚的高保真差异预览行。
+
+    用于在用户执行 `obsai transaction recover` 批准前，直观审阅回滚将对磁盘做出的全部反向修改。
+    """
+    journal = TransactionJournal.load(service.root, transaction_id)
+    if journal.data["status"] not in UNFINISHED:
+        raise TransactionError(f"Transaction {transaction_id} is not awaiting Vault recovery")
+    originals, _, _ = service._recovery_state(journal)
+    lines: list[PreviewLine] = []
+    for path, original in sorted(originals.items()):
+        current = service._current(path)
+        if current == original:
+            continue
+        old_lines = (current or b"").decode("utf-8", errors="replace").splitlines(keepends=True)
+        new_lines = (original or b"").decode("utf-8", errors="replace").splitlines(keepends=True)
+        for line in difflib.unified_diff(
+            old_lines,
+            new_lines,
+            fromfile=f"a/{path}" if current is not None else "/dev/null",
+            tofile=f"b/{path}" if original is not None else "/dev/null",
+        ):
+            style = "green" if line.startswith("+") else "red" if line.startswith("-") else "cyan" if line.startswith("@@") else None
+            lines.append(PreviewLine(line.rstrip("\n"), style, highlight=False))
+    return lines
 
 
 class TransactionService:
+    """多文件事务编排服务。
+
+    负责全库多笔记事务的意图规划（Plan）、物理前置安全审查（Preflight）、
+    预写日志与两阶段提交执行（Execute）、断电崩溃状态对齐与灾难自愈（Recover）。
+    """
+
     def __init__(
-        self, vault_root: Path, *, database_path: Path | None = None,
+        self,
+        vault_root: Path,
+        *,
+        database_path: Path | None = None,
         indexer: Callable[[Path], object] | None = None,
     ):
+        """初始化事务服务。
+
+        Args:
+            vault_root: 目标 Vault 知识库根目录。
+            database_path: 可选的 SQLite 衍生索引数据库路径。
+            indexer: 可选的索引刷新回调函数。
+        """
         self.safe = SafeWriteService(vault_root)
         self.root = self.safe.root
         self.database_path = database_path
@@ -36,10 +120,12 @@ class TransactionService:
 
     @staticmethod
     def journals(vault_root: Path) -> list[dict]:
+        """静态工具方法：扫描并列出目标知识库下的所有未竟或历史事务日志。"""
         root = vault_root.expanduser().resolve(strict=True)
         return list_journals(root)
 
     def _ensure_available(self) -> None:
+        """检查知识库是否存在未完成的未决事务，若存在则立即阻断所有新操作。"""
         pending = [item for item in list_journals(self.root) if item["status"] in UNFINISHED]
         if pending:
             ids = ", ".join(item["id"] for item in pending)
@@ -48,13 +134,37 @@ class TransactionService:
             )
 
     def ensure_ready(self) -> None:
-        """Block new writes or reindexing while a Vault transaction is unfinished."""
+        """公开门禁方法：当存在未决事务时阻断新写入或重新索引。"""
         self._ensure_available()
 
     def _path(self, relative: str, *, internal: bool = False) -> Path:
-        return self.safe._path(relative, internal=internal)
+        """通过 SafeWriteService 解析并严格校验相对物理路径。"""
+        return self.safe.path(relative, internal=internal)
 
     def plan(self, operations: Sequence[TransactionOperation]) -> TransactionPlan:
+        """编译一组高层事务操作意图，推导出零副作用的纯内存事务执行方案（TransactionPlan）。
+
+        规划推导流程：
+        1. 确保当前库无阻塞的未决事务；
+        2. 建立虚拟文件状态追踪表（virtual）、初始文件字节快照表（originals）及 POSIX 模式表（original_modes）；
+        3. 顺序模拟执行每项操作：
+           - create: 校验当前虚拟状态为空，更新虚拟状态为新内容；
+           - replace / append / frontmatter / rewrite_backlinks:
+             校验文件虚拟存在，执行精确替换或追加，记录 original_hash，更新虚拟状态；
+           - move / trash:
+             校验源存在、目标不存在且目标路径不同，自动推导受影响的反链，更新源虚拟状态为 None，目标为源内容；
+        4. 统计事务执行将产生的新建父目录树集合（absent_directories）；
+        5. 打包返回强类型且不可变的 TransactionPlan。
+
+        Args:
+            operations: 高层抽象操作意图序列。
+
+        Returns:
+            完全准备就绪的 TransactionPlan 方案。
+
+        Raises:
+            TransactionError / CollisionError / ConflictError / SafeWriteError: 意图参数冲突或语法不合法。
+        """
         self._ensure_available()
         if not operations:
             raise TransactionError("Transaction needs at least one operation")
@@ -141,19 +251,34 @@ class TransactionService:
                 absent_dirs.add(parent.relative_to(self.root).as_posix())
                 parent = parent.parent
         return TransactionPlan(
-            str(self.root), tuple(operations), tuple(changes), originals, finals, original_modes,
+            str(self.root),
+            tuple(operations),
+            tuple(changes),
+            originals,
+            finals,
+            original_modes,
             tuple(sorted(absent_dirs, key=lambda item: (item.count("/"), item))),
         )
 
     def plan_move_with_backlinks(self, path: str, destination: str) -> TransactionPlan:
-        """Move and rewrite only parser-confirmed, explicit vault-root path links."""
+        """为单篇笔记的移动规划事务方案，自动级联改写全库显式反向链接。"""
         return self.plan_moves_with_backlinks([(path, destination)])
 
     def plan_moves_with_backlinks(
-        self, moves: Sequence[tuple[str, str]],
+        self,
+        moves: Sequence[tuple[str, str]],
         extra_operations: Sequence[TransactionOperation] = (),
     ) -> TransactionPlan:
-        """Plan a selected batch as one transaction, including conservative backlink rewrites."""
+        """为批量笔记移动及关联反链级联改写规划统一的原子事务方案。
+
+        处理流程：
+        1. 校验入参：拒绝重复移动同一源文件或多个移动竞争同一目标；
+        2. 遍历知识库中所有包含 `[[` 的 Markdown 文件；
+        3. 针对每个文件调用 `rewrite_explicit_links`，安全改写指向旧路径的显式 WikiLink；
+        4. 将改写操作作为 `rewrite_backlinks` 操作追加进事务；
+        5. 将模糊短链文件路径收集进 `ambiguous_backlinks` 供用户审查；
+        6. 调用 `self.plan` 编译最终方案。
+        """
         self._ensure_available()
         if not moves:
             raise TransactionError("At least one move is required")
@@ -194,19 +319,35 @@ class TransactionService:
         operations.extend(extra_operations)
         plan = self.plan(operations)
         return TransactionPlan(
-            plan.vault_root, plan.operations, plan.changes, plan.originals,
-            plan.finals, plan.original_modes, plan.absent_directories, tuple(sorted(ambiguous)),
+            plan.vault_root,
+            plan.operations,
+            plan.changes,
+            plan.originals,
+            plan.finals,
+            plan.original_modes,
+            plan.absent_directories,
+            tuple(sorted(ambiguous)),
         )
 
     def preview(self, plan: TransactionPlan, console: Console) -> None:
-        for change in plan.changes:
-            self.safe.preview(ChangeSet(change), console)
-        if plan.ambiguous_backlinks:
-            console.print("Ambiguous WikiLinks left unchanged in:", style="yellow")
-            for path in plan.ambiguous_backlinks:
-                console.print(f"  {path}", markup=False)
+        """在 Rich 控制台中输出整场事务的格式化差异对比预览。"""
+        for line in plan_preview_lines(plan):
+            console.print(line.text, style=line.style, markup=False, highlight=line.highlight)
 
     def preflight(self, plan: TransactionPlan) -> None:
+        """物理落盘前的严苛预检（Preflight Verification）。
+
+        校验防线：
+        1. 校验方案归属当前 Vault；
+        2. 临门一脚校验所有涉及文件的 CAS 原始内容哈希与可读权限；
+        3. 向上回溯父目录，核验物理写与执行权限（W_OK | X_OK）；
+        4. **跨设备文件系统边界防御**：比对移动源路径与目标路径的 `st_dev` 设备号，
+           坚决阻断跨设备分区移动（跨分区硬链接会导致崩溃不一致）；
+        5. **剩余磁盘空间安全红线**：根据快照大小与新写入大小，核验可用空间充足。
+
+        Raises:
+            TransactionError: 权限不足、跨设备分区、或磁盘空间告急。
+        """
         self._ensure_available()
         if plan.vault_root != str(self.root):
             raise TransactionError("Transaction plan belongs to another Vault")
@@ -243,6 +384,7 @@ class TransactionService:
             raise TransactionError("Insufficient free space for transaction snapshots and writes")
 
     def _current(self, path: str) -> bytes | None:
+        """读取指定物理相对路径的当前二进制字节流，不存在返回 None。"""
         target = self._path(path, internal=path.startswith(".obsai-trash/"))
         if not target.exists() and not target.is_symlink():
             return None
@@ -251,8 +393,10 @@ class TransactionService:
         return target.read_bytes()
 
     @staticmethod
-    def _state_after(originals: dict[str, bytes | None], changes: Sequence[FileChange],
-                     count: int) -> dict[str, bytes | None]:
+    def _state_after(
+        originals: dict[str, bytes | None], changes: Sequence[FileChange], count: int
+    ) -> dict[str, bytes | None]:
+        """推导在顺序执行了前 count 步物理变更后，理论上文件系统所处的预期状态快照。"""
         state = dict(originals)
         for change in changes[:count]:
             if change.operation in ("move", "trash"):
@@ -265,6 +409,7 @@ class TransactionService:
 
     @staticmethod
     def _changed_paths(changes: Sequence[FileChange]) -> set[str]:
+        """提取变更序列所涉及的所有相对物理路径集合（包含源路径与目标路径）。"""
         paths = set()
         for change in changes:
             paths.add(change.path)
@@ -273,18 +418,31 @@ class TransactionService:
         return paths
 
     def _verify(self, expected: dict[str, bytes | None], paths: set[str] | None = None) -> None:
+        """核验物理磁盘上的真实文件字节是否与预期状态完全一致。"""
         for path in sorted(paths if paths is not None else expected):
             if self._current(path) != expected[path]:
                 raise RecoveryRequiredError(f"Transaction file differs from expected state: {path}")
 
-    def _rollback(self, originals: dict[str, bytes | None],
-                  original_modes: dict[str, int | None],
-                  changes: Sequence[FileChange], applied_count: int,
-                  absent_directories: Sequence[str]) -> None:
+    def _rollback(
+        self,
+        originals: dict[str, bytes | None],
+        original_modes: dict[str, int | None],
+        changes: Sequence[FileChange],
+        applied_count: int,
+        absent_directories: Sequence[str],
+    ) -> None:
+        """执行事务物理回滚。
+
+        回滚操作步骤：
+        1. 核对磁盘状态处于预期的 `_state_after(..., applied_count)` 断点；
+        2. 先还原原始存在的文件：调用原子写入还原字节流，并恢复原 POSIX mode；
+        3. 再清理事务新建的文件：unlink 删除并刷盘父目录项；
+        4. 逆序清理事务新建的空父目录（从深层到浅层）。
+        """
         paths = self._changed_paths(changes[:applied_count])
         expected = self._state_after(originals, changes, applied_count)
         self._verify(expected, paths)
-        # Restore originals first, then remove files created by the transaction.
+        # 先还原原始文件，再清理新生成文件
         for path in sorted(paths):
             original = originals[path]
             if original is None:
@@ -307,8 +465,11 @@ class TransactionService:
         for directory in sorted(absent_directories, key=lambda item: item.count("/"), reverse=True):
             relative = PurePosixPath(directory)
             target = self.root / directory
-            if (relative.is_absolute() or any(part in (".", "..") for part in directory.split("/"))
-                    or not target.resolve(strict=False).is_relative_to(self.root)):
+            if (
+                relative.is_absolute()
+                or any(part in (".", "..") for part in directory.split("/"))
+                or not target.resolve(strict=False).is_relative_to(self.root)
+            ):
                 raise RecoveryRequiredError(f"Unsafe transaction directory: {directory}")
             try:
                 target.rmdir()
@@ -316,6 +477,7 @@ class TransactionService:
                 pass
 
     def _cleanup(self, journal: TransactionJournal) -> None:
+        """安全物理移除已成功终结（complete / rolled_back）的事务日志目录。"""
         try:
             shutil.rmtree(journal.directory)
         except OSError:
@@ -326,6 +488,7 @@ class TransactionService:
             pass
 
     def _reindex(self, plan: TransactionPlan) -> None:
+        """在物理文件成功提交后，驱动衍生元数据索引更新。"""
         if self.indexer is not None:
             self.indexer(self.root)
         elif self.database_path is not None:
@@ -336,7 +499,7 @@ class TransactionService:
             with Database(self.database_path) as database:
                 repository = IndexRepository(database)
                 with database.transaction():
-                    # Preserve logical identity even when a move also changes content.
+                    # 针对移动操作预先在索引库更新路径，保持实体稳定 ID
                     for change in plan.changes:
                         if change.operation == "move" and change.destination is not None:
                             existing = repository.notes.get_by_path(change.path)
@@ -345,6 +508,7 @@ class TransactionService:
                     IncrementalIndexer(repository).update(self.root)
 
     def _mark_index_dirty(self, paths: list[str], reason: str) -> None:
+        """当索引更新异常时，尽力向 SQLite 写入脏数据队列标记。"""
         if self.database_path is None:
             return
         try:
@@ -355,10 +519,28 @@ class TransactionService:
                 for path in paths:
                     repository.mark_dirty(path, reason)
         except Exception:
-            # The durable journal remains authoritative when SQLite itself is unavailable.
+            # 即使 SQLite 自身不可用，磁盘上的 journal.json 依旧是权威记录
             pass
 
     def execute(self, plan: TransactionPlan, *, approved: bool) -> TransactionResult:
+        """执行事务物理落地与两阶段提交。
+
+        受人工确认守卫（approved）保护。完整流转：
+        1. preflight 前置安全检查；
+        2. 持久化创建 WAL 预写日志与快照（status='prepared'）；
+        3. 标记 status='applying'，受 defer_shutdown 保护逐个应用变更并累加 applied_count；
+        4. 核验终态文件字节完全对齐（_verify），标记 status='committed'；
+        5. 触发衍生索引更新（_reindex）：
+           - 若索引失败，绝不回滚物理文件，标记 status='index_dirty'，返回 committed=True, index_dirty=True；
+        6. 索引成功，标记 status='complete' 并安全清理日志目录。
+
+        Args:
+            plan: 经过预审的事务执行方案。
+            approved: 是否获得用户或策略显式批准。
+
+        Returns:
+            表征最终提交状态的 TransactionResult 对象。
+        """
         if not approved:
             return TransactionResult(None, committed=False, cancelled=True)
         self.preflight(plan)
@@ -388,7 +570,10 @@ class TransactionService:
                 try:
                     journal.update(status="rolling_back", error=f"{type(exc).__name__}: {exc}")
                     self._rollback(
-                        plan.originals, plan.original_modes, plan.changes, applied_count,
+                        plan.originals,
+                        plan.original_modes,
+                        plan.changes,
+                        applied_count,
                         plan.absent_directories,
                     )
                     journal.update(status="rolled_back")
@@ -398,7 +583,8 @@ class TransactionService:
                     raise RecoveryRequiredError(
                         f"Rollback failed for {transaction_id}; run 'obsai transaction recover {transaction_id}'"
                     ) from rollback_exc
-            if isinstance(exc, ShutdownRequested):
+            # 物理文件已完整恢复为初始状态；向外直接抛出进程中止异常
+            if is_process_stop(exc):
                 raise
             raise TransactionError(f"Transaction failed and was rolled back: {exc}") from exc
 
@@ -411,7 +597,7 @@ class TransactionService:
             with defer_shutdown():
                 journal.update(status="index_dirty", dirty_paths=paths, error=reason)
                 self._mark_index_dirty(paths, reason)
-            if isinstance(exc, ShutdownRequested):
+            if is_process_stop(exc):
                 raise
             return TransactionResult(transaction_id, committed=True, index_dirty=True, index_error=reason)
         with defer_shutdown():
@@ -420,6 +606,11 @@ class TransactionService:
         return TransactionResult(transaction_id, committed=True)
 
     def recover(self, transaction_id: str, *, approved: bool) -> TransactionResult:
+        """从意外中断的事务中执行断点推导与灾难恢复（Rollback Recovery）。
+
+        受人工确认守卫（approved）保护。
+        调用 `_recovery_state` 推导中断时的确切断点步数，执行回滚并清理日志。
+        """
         if not approved:
             return TransactionResult(transaction_id, committed=False, cancelled=True)
         journal = TransactionJournal.load(self.root, transaction_id)
@@ -430,7 +621,10 @@ class TransactionService:
         journal.update(status="rolling_back")
         try:
             self._rollback(
-                originals, original_modes, changes, count,
+                originals,
+                original_modes,
+                changes,
+                count,
                 journal.data.get("absent_directories", []),
             )
         except Exception as exc:
@@ -443,6 +637,11 @@ class TransactionService:
     def _recovery_state(
         self, journal: TransactionJournal,
     ) -> tuple[dict[str, bytes | None], tuple[FileChange, ...], int]:
+        """推导磁盘当前实际状态对应中断事务的哪一步已应用断点。
+
+        遍历从第 0 步到第 N 步的所有可能理论状态，比对当前物理文件。
+        若无法与任何已知状态对齐，抛出 RecoveryRequiredError，防止在脏数据上错误回滚。
+        """
         originals = journal.originals()
         changes = tuple(FileChange(**item) for item in journal.data["changes"])
         actual = {path: self._current(path) for path in originals}
@@ -457,27 +656,12 @@ class TransactionService:
         return originals, changes, max(matching)
 
     def preview_recovery(self, transaction_id: str, console: Console) -> None:
-        """Show the exact current-to-snapshot diff before rollback approval."""
-        journal = TransactionJournal.load(self.root, transaction_id)
-        if journal.data["status"] not in UNFINISHED:
-            raise TransactionError(f"Transaction {transaction_id} is not awaiting Vault recovery")
-        originals, _, _ = self._recovery_state(journal)
-        for path, original in sorted(originals.items()):
-            current = self._current(path)
-            if current == original:
-                continue
-            old_lines = (current or b"").decode("utf-8", errors="replace").splitlines(keepends=True)
-            new_lines = (original or b"").decode("utf-8", errors="replace").splitlines(keepends=True)
-            for line in difflib.unified_diff(
-                old_lines, new_lines,
-                fromfile=f"a/{path}" if current is not None else "/dev/null",
-                tofile=f"b/{path}" if original is not None else "/dev/null",
-            ):
-                style = "green" if line.startswith("+") else "red" if line.startswith("-") else "cyan" if line.startswith("@@") else None
-                console.print(line.rstrip("\n"), style=style, markup=False, highlight=False)
+        """在 Rich 控制台中展示从当前磁盘状态回滚到快照原始状态的精确 Diff。"""
+        for line in recovery_preview_lines(self, transaction_id):
+            console.print(line.text, style=line.style, markup=False, highlight=line.highlight)
 
     def clear_index_dirty(self) -> None:
-        """Call after a successful full incremental update."""
+        """在全量增量索引成功修复后，清理残留的 index_dirty 状态与日志。"""
         for item in list_journals(self.root):
             if item["status"] in ("index_dirty", "committed"):
                 if self.database_path is not None:
