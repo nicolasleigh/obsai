@@ -5,7 +5,7 @@ import pytest
 
 from obsai.errors import ParseError
 from obsai.vault.models import Block
-from obsai.vault.parser import parse_markdown, parse_note
+from obsai.vault.parser import parse_markdown, parse_note, strip_block_id, wikilink_display_text
 
 VAULT = Path(__file__).parents[1] / "fixtures" / "vault"
 
@@ -103,3 +103,74 @@ def test_parser_is_deterministic() -> None:
 def test_basic_note_matches_golden_snapshot() -> None:
     expected = json.loads((VAULT / "expected_basic.json").read_text(encoding="utf-8"))
     assert note("basic.md").model_dump(mode="json") == expected
+
+
+# --------------------------------------------------------------------------- #
+# The two rules the note view borrows from the parser
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.parametrize(
+    ("target", "expected"),
+    [
+        ("Note", "Note"),
+        ("Other|Alias", "Alias"),
+        ("Target#Heading", "Target"),
+        ("Target#^block-id", "Target"),
+        ("#Heading", "Heading"),
+        ("#^block-id", "block-id"),
+    ],
+)
+def test_wikilink_display_text_agrees_with_what_the_parser_substitutes(
+    target: str, expected: str
+) -> None:
+    """The helper has to match ``Block.content``, not merely be reasonable.
+
+    ``Block.content`` replaces every ``[[...]]`` with exactly this string, and the
+    note view searches for it to put the link back. A helper that disagreed with
+    the substitution would still produce correct prose — with no links in it — and
+    nothing would fail loudly. So the assertion is against the block, not against
+    a hand-written expectation of the helper alone.
+    """
+    parsed = parse_markdown(f"See [[{target}]].\n", "a.md")
+
+    assert parsed.wikilinks, f"[[{target}]] 没有被解析成 WikiLink"
+    assert parsed.blocks[0].content == f"See {expected}."
+    link = parsed.wikilinks[0]
+    assert (
+        wikilink_display_text(
+            target_path=link.target_path,
+            display_text=link.display_text,
+            target_heading=link.target_heading,
+            target_block_id=link.target_block_id,
+        )
+        == expected
+    )
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("把上限写进 redis.conf 更省事。 ^maxmemory", "把上限写进 redis.conf 更省事。"),
+        ("^standalone", ""),
+        ("没有块引用的一段话。", "没有块引用的一段话。"),
+        ("价格 ^2 元", "价格 ^2 元"),
+    ],
+)
+def test_strip_block_id_removes_only_a_trailing_marker(text: str, expected: str) -> None:
+    """``^2`` mid-sentence is arithmetic; ``^maxmemory`` at the end is a target."""
+    assert strip_block_id(text) == expected
+
+
+def test_the_block_id_stays_in_block_content() -> None:
+    """The divergence is deliberate and one-directional.
+
+    The index keeps the marker so a note stays findable by the ID of one of its
+    blocks; only the reader's view drops it. Pinned here so the day someone
+    "fixes" ``Block.content`` they find out it was not a bug.
+    """
+    parsed = parse_markdown("把上限写进 redis.conf 更省事。 ^maxmemory\n", "a.md")
+
+    assert parsed.blocks[0].block_id == "maxmemory"
+    assert parsed.blocks[0].content == "把上限写进 redis.conf 更省事。 ^maxmemory"
+    assert parsed.block_references[0].content == "把上限写进 redis.conf 更省事。"
