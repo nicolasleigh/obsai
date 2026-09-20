@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import asyncio
 
+from obsai.api.routes.search import SearchRequestBody, _refuse_to_degrade
+from obsai.application.dto import SemanticProbe
 from obsai.application.embedding import build_embedding_pipeline
 from obsai.application.search import probe_semantic
 from obsai.config.models import EmbeddingConfig, Settings
@@ -54,3 +56,10 @@ def test_local_semantic_probe_is_ready_without_consent(tmp_path) -> None:
     assert probe.consent is None
     assert probe.reason == ""
     assert probe.failure is None
+
+
+def test_local_semantic_probe_is_allowed_in_mandatory_mode() -> None:
+    request = SearchRequestBody(query="local", mode="semantic")
+    probe = SemanticProbe(consent=None, reason="", failure=None)
+
+    _refuse_to_degrade(request, probe)

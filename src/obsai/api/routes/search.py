@@ -101,6 +101,12 @@ def _refuse_to_degrade(request: SearchRequestBody, probe: SemanticProbe) -> None
                 details={"consent": probe.consent.model_dump(mode="json")},
             )
         return
+    # A local Ollama probe intentionally has neither a consent challenge nor a
+    # failure.  The query stays on this machine, so strict semantic mode can run
+    # directly; treating this successful probe as an unavailable backend would
+    # incorrectly return a 503 with an empty message.
+    if probe.failure is None and probe.reason == "":
+        return
     if probe.failure == "index_missing":
         raise SemanticIndexMissingError(probe.reason)
     raise SemanticUnavailableError(probe.reason)
