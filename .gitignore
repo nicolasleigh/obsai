@@ -11,4 +11,9 @@ build/
 obsai.toml
 .obsai/
 
+# Local credentials and environment overrides
+.env
+.env.*
+!.env.example
+
 BUGS.md

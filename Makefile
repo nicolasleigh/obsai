@@ -38,8 +38,7 @@ run: dev ## dev 的别名，启动前后端完整开发环境
 
 api: ## 仅启动后端 FastAPI 服务（带热重载与本地代理绕过）
 	@echo "启动后端 API -> http://$(HOST):$(PORT)"
-	@NO_PROXY="localhost,127.0.0.1" no_proxy="localhost,127.0.0.1" \
-		$(PYTHON) -m uvicorn obsai.api.app:app --host $(HOST) --port $(PORT) --reload
+	@OBSAI_UI_HOST=$(HOST) OBSAI_UI_PORT=$(PORT) OBSAI_UI_NO_WEB=1 ./scripts/dev.sh
 
 backend: api ## api 的别名
 
@@ -85,4 +84,3 @@ clean: ## 清理构建产物与临时缓存
 	@find . -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
 	@find . -type d -name ".pytest_cache" -exec rm -rf {} + 2>/dev/null || true
 	@echo "清理完成"
-

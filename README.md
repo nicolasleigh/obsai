@@ -182,6 +182,11 @@ requires an interactive confirmation before sending text to OpenAI. Set
 and never send real notes or queries to OpenAI. Semantic search also asks before
 sending its query for embedding. There is no automatic local-provider fallback.
 
+For local development, copy `.env.example` to `.env` and fill in
+`OPENAI_API_KEY`. `make dev` and `make api` load the file automatically; an
+already-exported shell variable takes precedence. The local `.env` is ignored by
+Git and must never be committed.
+
 The optional config fields are:
 
 ```toml
