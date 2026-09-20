@@ -175,6 +175,12 @@ def test_links_cli_and_graph_search(tmp_path, monkeypatch):
     assert isinstance(unavailable.exception, ConfigError)
 
     import importlib
+    from datetime import datetime, timedelta, timezone
+    from decimal import Decimal
+
+    from obsai.application import search as search_module
+    from obsai.application.dto import ConsentApproval, RemoteConsent, SemanticProbe
+
     cli_module = importlib.import_module("obsai.cli.app")
     note = repository.notes.get_by_path("C.md")
     chunk = repository.chunks.list_for_note(note.id)[0]
@@ -182,7 +188,21 @@ def test_links_cli_and_graph_search(tmp_path, monkeypatch):
         chunk_id=chunk.chunk_id, note_id=note.id, path=note.path, title=note.title,
         heading_path=chunk.heading_path, snippet="", score=0.9, source="semantic",
     )])
-    monkeypatch.setattr(cli_module, "_semantic_retriever", lambda *args, **kwargs: (semantic, ""))
+    # Consent moved out of the CLI into the application layer, so the seam is now
+    # "the user approved this challenge" plus "build the approved retriever".
+    now = datetime.now(timezone.utc)
+    consent = RemoteConsent(
+        consent_id="test-consent", query_hash="test-hash", generation_id="test-generation",
+        expires_at=now + timedelta(minutes=5), query_tokens=1, estimated_cost_usd=Decimal("0"),
+    )
+    approval = ConsentApproval(
+        consent_id="test-consent", query_hash="test-hash", generation_id="test-generation",
+        nonce="test-nonce", approved_at=now,
+    )
+    monkeypatch.setattr(
+        cli_module, "_approve_remote", lambda *args, **kwargs: (SemanticProbe(consent=consent), approval)
+    )
+    monkeypatch.setattr(search_module, "build_semantic_retriever", lambda *args, **kwargs: semantic)
     before = (vault / "A.md").read_bytes()
     suggestion = runner.invoke(app, ["links", "suggest", "A.md"])
     assert suggestion.exit_code == 0, suggestion.output

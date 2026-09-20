@@ -1,0 +1,548 @@
+[
+  {
+    "name": "help",
+    "argv": [
+      "--help"
+    ],
+    "exit_code": 0,
+    "stdout": "                                                                                \n Usage: root [OPTIONS] COMMAND [ARGS]...                                        \n                                                                                \n ObsAgent command-line interface.                                               \n                                                                                \n╭─ Options ────────────────────────────────────────────────────────────────────╮\n│ --version                     Show version and exit.                         │\n│ --install-completion          Install completion for the current shell.      │\n│ --show-completion             Show completion for the current shell, to copy │\n│                               it or customize the installation.              │\n│ --help                        Show this message and exit.                    │\n╰──────────────────────────────────────────────────────────────────────────────╯\n╭─ Commands ───────────────────────────────────────────────────────────────────╮\n│ status       Show initial configuration status.                              │\n│ search       Search the local hybrid, keyword, semantic, or graph-expanded   │\n│              index.                                                          │\n│ ask          Answer once from bounded retrieved evidence with validated      │\n│              citations.                                                      │\n│ index        Maintain the local derived index.                               │\n│ note         Preview and approve safe single-note Vault changes.             │\n│ transaction  Inspect and recover Vault transactions.                         │\n│ agent        Run or resume the bounded agent workflow.                       │\n│ organize     Review and apply conservative Vault organization proposals.     │\n│ links        Inspect WikiLink graph and suggest related notes.               │\n╰──────────────────────────────────────────────────────────────────────────────╯\n\n",
+    "stderr": "",
+    "exception": null
+  },
+  {
+    "name": "version",
+    "argv": [
+      "--version"
+    ],
+    "exit_code": 0,
+    "stdout": "obsai 0.1.0\n",
+    "stderr": "",
+    "exception": null
+  },
+  {
+    "name": "status",
+    "argv": [
+      "status"
+    ],
+    "exit_code": 0,
+    "stdout": "ObsAgent initialized\nVault: <ROOT>/vault\n",
+    "stderr": "",
+    "exception": null
+  },
+  {
+    "name": "index-update-initial",
+    "argv": [
+      "index",
+      "update"
+    ],
+    "exit_code": 0,
+    "stdout": "Created: 4\nModified: 0\nRenamed: 0\nMoved: 0\nDeleted: 0\nUnchanged: 0\nAffected WikiLinks: 0\n",
+    "stderr": "",
+    "exception": null
+  },
+  {
+    "name": "index-update-idempotent",
+    "argv": [
+      "index",
+      "update"
+    ],
+    "exit_code": 0,
+    "stdout": "Created: 0\nModified: 0\nRenamed: 0\nMoved: 0\nDeleted: 0\nUnchanged: 4\nAffected WikiLinks: 0\n",
+    "stderr": "",
+    "exception": null
+  },
+  {
+    "name": "index-rebuild",
+    "argv": [
+      "index",
+      "rebuild"
+    ],
+    "exit_code": 0,
+    "stdout": "Shadow index validated and activated: <ROOT>/index.db\nNotes indexed: 4\nEmbeddings must be regenerated with 'obsai index embeddings'\n",
+    "stderr": "",
+    "exception": null
+  },
+  {
+    "name": "search-hybrid",
+    "argv": [
+      "search",
+      "Alpha"
+    ],
+    "exit_code": 0,
+    "stdout": "Hybrid retrieval degraded: Semantic index missing; run 'obsai index embeddings'\nWarning: Semantic index missing; run 'obsai index embeddings'\nAlpha  [A.md]\nAlpha\n[Alpha] body with a [[Reference]] link.\nBeta  [Notes/Beta.md]\nBeta\nBeta body mentioning [Alpha].\nReference  [Reference.md]\nReference\nSee [[A]] and [[A#[Alpha]]].\nLoose Note  [Inbox/Loose.md]\nLoose Note\nUnfiled content about [Alpha].\n",
+    "stderr": "Hybrid retrieval degraded: Semantic index missing; run 'obsai index embeddings'\nWarning: Semantic index missing; run 'obsai index embeddings'\n",
+    "exception": null
+  },
+  {
+    "name": "search-keyword",
+    "argv": [
+      "search",
+      "Alpha",
+      "--mode",
+      "keyword"
+    ],
+    "exit_code": 0,
+    "stdout": "Alpha  [A.md]\nAlpha\n[Alpha] body with a [[Reference]] link.\nBeta  [Notes/Beta.md]\nBeta\nBeta body mentioning [Alpha].\nReference  [Reference.md]\nReference\nSee [[A]] and [[A#[Alpha]]].\nLoose Note  [Inbox/Loose.md]\nLoose Note\nUnfiled content about [Alpha].\n",
+    "stderr": "",
+    "exception": null
+  },
+  {
+    "name": "search-hybrid-json",
+    "argv": [
+      "search",
+      "Alpha",
+      "--mode",
+      "hybrid",
+      "--json"
+    ],
+    "exit_code": 0,
+    "stdout": "Hybrid retrieval degraded: Semantic index missing; run 'obsai index embeddings'\nWarning: Semantic index missing; run 'obsai index embeddings'\n[\n  {\n    \"chunk_id\": \"<HASH>\",\n    \"note_id\": \"<UUID>\",\n    \"path\": \"A.md\",\n    \"title\": \"Alpha\",\n    \"heading_path\": [\n      \"Alpha\"\n    ],\n    \"snippet\": \"[Alpha] body with a [[Reference]] link.\",\n    \"score\": 0.01639344262295082,\n    \"source\": \"hybrid\",\n    \"sources\": [\n      \"keyword\"\n    ]\n  },\n  {\n    \"chunk_id\": \"<HASH>\",\n    \"note_id\": \"<UUID>\",\n    \"path\": \"Notes/Beta.md\",\n    \"title\": \"Beta\",\n    \"heading_path\": [\n      \"Beta\"\n    ],\n    \"snippet\": \"Beta body mentioning [Alpha].\",\n    \"score\": 0.016129032258064516,\n    \"source\": \"hybrid\",\n    \"sources\": [\n      \"keyword\"\n    ]\n  },\n  {\n    \"chunk_id\": \"<HASH>\",\n    \"note_id\": \"<UUID>\",\n    \"path\": \"Reference.md\",\n    \"title\": \"Reference\",\n    \"heading_path\": [\n      \"Reference\"\n    ],\n    \"snippet\": \"See [[A]] and [[A#[Alpha]]].\",\n    \"score\": 0.015873015873015872,\n    \"source\": \"hybrid\",\n    \"sources\": [\n      \"keyword\"\n    ]\n  },\n  {\n    \"chunk_id\": \"<HASH>\",\n    \"note_id\": \"<UUID>\",\n    \"path\": \"Inbox/Loose.md\",\n    \"title\": \"Loose Note\",\n    \"heading_path\": [\n      \"Loose Note\"\n    ],\n    \"snippet\": \"Unfiled content about [Alpha].\",\n    \"score\": 0.015625,\n    \"source\": \"hybrid\",\n    \"sources\": [\n      \"keyword\"\n    ]\n  }\n]\n",
+    "stderr": "Hybrid retrieval degraded: Semantic index missing; run 'obsai index embeddings'\nWarning: Semantic index missing; run 'obsai index embeddings'\n",
+    "exception": null
+  },
+  {
+    "name": "search-graph",
+    "argv": [
+      "search",
+      "Alpha",
+      "--mode",
+      "graph"
+    ],
+    "exit_code": 0,
+    "stdout": "Hybrid retrieval degraded: Semantic index missing; run 'obsai index embeddings'\nWarning: Semantic index missing; run 'obsai index embeddings'\nAlpha  [A.md]\nAlpha\n[Alpha] body with a [[Reference]] link.\nBeta  [Notes/Beta.md]\nBeta\nBeta body mentioning [Alpha].\nReference  [Reference.md]\nReference\nSee [[A]] and [[A#[Alpha]]].\nLoose Note  [Inbox/Loose.md]\nLoose Note\nUnfiled content about [Alpha].\n",
+    "stderr": "Hybrid retrieval degraded: Semantic index missing; run 'obsai index embeddings'\nWarning: Semantic index missing; run 'obsai index embeddings'\n",
+    "exception": null
+  },
+  {
+    "name": "search-semantic-missing-index",
+    "argv": [
+      "search",
+      "Alpha",
+      "--mode",
+      "semantic"
+    ],
+    "exit_code": 1,
+    "stdout": "",
+    "stderr": "",
+    "exception": "ConfigError"
+  },
+  {
+    "name": "search-invalid-mode",
+    "argv": [
+      "search",
+      "Alpha",
+      "--mode",
+      "bogus"
+    ],
+    "exit_code": 2,
+    "stdout": "Usage: root search [OPTIONS] {query}\nTry 'root search --help' for help.\n╭─ Error ──────────────────────────────────────────────────────────────────────╮\n│ Invalid value for --mode: Use hybrid, keyword, semantic, or graph            │\n╰──────────────────────────────────────────────────────────────────────────────╯\n",
+    "stderr": "Usage: root search [OPTIONS] {query}\nTry 'root search --help' for help.\n╭─ Error ──────────────────────────────────────────────────────────────────────╮\n│ Invalid value for --mode: Use hybrid, keyword, semantic, or graph            │\n╰──────────────────────────────────────────────────────────────────────────────╯\n",
+    "exception": "SystemExit"
+  },
+  {
+    "name": "search-tag-no-match",
+    "argv": [
+      "search",
+      "Alpha",
+      "--limit",
+      "1",
+      "--tag",
+      "absent"
+    ],
+    "exit_code": 0,
+    "stdout": "Hybrid retrieval degraded: Semantic index missing; run 'obsai index embeddings'\nWarning: Semantic index missing; run 'obsai index embeddings'\n",
+    "stderr": "Hybrid retrieval degraded: Semantic index missing; run 'obsai index embeddings'\nWarning: Semantic index missing; run 'obsai index embeddings'\n",
+    "exception": null
+  },
+  {
+    "name": "search-folder",
+    "argv": [
+      "search",
+      "Alpha",
+      "--folder",
+      "Notes"
+    ],
+    "exit_code": 0,
+    "stdout": "Hybrid retrieval degraded: Semantic index missing; run 'obsai index embeddings'\nWarning: Semantic index missing; run 'obsai index embeddings'\nBeta  [Notes/Beta.md]\nBeta\nBeta body mentioning [Alpha].\n",
+    "stderr": "Hybrid retrieval degraded: Semantic index missing; run 'obsai index embeddings'\nWarning: Semantic index missing; run 'obsai index embeddings'\n",
+    "exception": null
+  },
+  {
+    "name": "search-frontmatter-scalar",
+    "argv": [
+      "search",
+      "Alpha",
+      "--frontmatter",
+      "status=done"
+    ],
+    "exit_code": 0,
+    "stdout": "Hybrid retrieval degraded: Semantic index missing; run 'obsai index embeddings'\nWarning: Semantic index missing; run 'obsai index embeddings'\n",
+    "stderr": "Hybrid retrieval degraded: Semantic index missing; run 'obsai index embeddings'\nWarning: Semantic index missing; run 'obsai index embeddings'\n",
+    "exception": null
+  },
+  {
+    "name": "search-frontmatter-nonscalar",
+    "argv": [
+      "search",
+      "Alpha",
+      "--frontmatter",
+      "x={\"a\":1}"
+    ],
+    "exit_code": 2,
+    "stdout": "Usage: root search [OPTIONS] {query}\nTry 'root search --help' for help.\n╭─ Error ──────────────────────────────────────────────────────────────────────╮\n│ Invalid value: Only scalar metadata values are supported                     │\n╰──────────────────────────────────────────────────────────────────────────────╯\n",
+    "stderr": "Usage: root search [OPTIONS] {query}\nTry 'root search --help' for help.\n╭─ Error ──────────────────────────────────────────────────────────────────────╮\n│ Invalid value: Only scalar metadata values are supported                     │\n╰──────────────────────────────────────────────────────────────────────────────╯\n",
+    "exception": "SystemExit"
+  },
+  {
+    "name": "search-frontmatter-malformed",
+    "argv": [
+      "search",
+      "Alpha",
+      "--frontmatter",
+      "noequals"
+    ],
+    "exit_code": 2,
+    "stdout": "Usage: root search [OPTIONS] {query}\nTry 'root search --help' for help.\n╭─ Error ──────────────────────────────────────────────────────────────────────╮\n│ Invalid value: Expected key=value                                            │\n╰──────────────────────────────────────────────────────────────────────────────╯\n",
+    "stderr": "Usage: root search [OPTIONS] {query}\nTry 'root search --help' for help.\n╭─ Error ──────────────────────────────────────────────────────────────────────╮\n│ Invalid value: Expected key=value                                            │\n╰──────────────────────────────────────────────────────────────────────────────╯\n",
+    "exception": "SystemExit"
+  },
+  {
+    "name": "search-dataview",
+    "argv": [
+      "search",
+      "Alpha",
+      "--dataview",
+      "rating=5"
+    ],
+    "exit_code": 0,
+    "stdout": "Hybrid retrieval degraded: Semantic index missing; run 'obsai index embeddings'\nWarning: Semantic index missing; run 'obsai index embeddings'\n",
+    "stderr": "Hybrid retrieval degraded: Semantic index missing; run 'obsai index embeddings'\nWarning: Semantic index missing; run 'obsai index embeddings'\n",
+    "exception": null
+  },
+  {
+    "name": "search-modified-after-bad",
+    "argv": [
+      "search",
+      "Alpha",
+      "--modified-after",
+      "notadate"
+    ],
+    "exit_code": 2,
+    "stdout": "Usage: root search [OPTIONS] {query}\nTry 'root search --help' for help.\n╭─ Error ──────────────────────────────────────────────────────────────────────╮\n│ Invalid value: Use an ISO-8601 date or datetime                              │\n╰──────────────────────────────────────────────────────────────────────────────╯\n",
+    "stderr": "Usage: root search [OPTIONS] {query}\nTry 'root search --help' for help.\n╭─ Error ──────────────────────────────────────────────────────────────────────╮\n│ Invalid value: Use an ISO-8601 date or datetime                              │\n╰──────────────────────────────────────────────────────────────────────────────╯\n",
+    "exception": "SystemExit"
+  },
+  {
+    "name": "search-modified-after-ok",
+    "argv": [
+      "search",
+      "Alpha",
+      "--modified-after",
+      "2000-01-01"
+    ],
+    "exit_code": 0,
+    "stdout": "Hybrid retrieval degraded: Semantic index missing; run 'obsai index embeddings'\nWarning: Semantic index missing; run 'obsai index embeddings'\nAlpha  [A.md]\nAlpha\n[Alpha] body with a [[Reference]] link.\nBeta  [Notes/Beta.md]\nBeta\nBeta body mentioning [Alpha].\nReference  [Reference.md]\nReference\nSee [[A]] and [[A#[Alpha]]].\nLoose Note  [Inbox/Loose.md]\nLoose Note\nUnfiled content about [Alpha].\n",
+    "stderr": "Hybrid retrieval degraded: Semantic index missing; run 'obsai index embeddings'\nWarning: Semantic index missing; run 'obsai index embeddings'\n",
+    "exception": null
+  },
+  {
+    "name": "search-strict-semantic",
+    "argv": [
+      "search",
+      "Alpha",
+      "--strict-semantic"
+    ],
+    "exit_code": 1,
+    "stdout": "",
+    "stderr": "",
+    "exception": "EmbeddingError"
+  },
+  {
+    "name": "links-backlinks",
+    "argv": [
+      "links",
+      "backlinks",
+      "A.md"
+    ],
+    "exit_code": 0,
+    "stdout": "Reference.md → A\nReference.md → A#Alpha\n",
+    "stderr": "",
+    "exception": null
+  },
+  {
+    "name": "links-backlinks-missing",
+    "argv": [
+      "links",
+      "backlinks",
+      "Nope.md"
+    ],
+    "exit_code": 1,
+    "stdout": "",
+    "stderr": "",
+    "exception": "VaultError"
+  },
+  {
+    "name": "links-outgoing",
+    "argv": [
+      "links",
+      "outgoing",
+      "A.md"
+    ],
+    "exit_code": 0,
+    "stdout": "Reference\n",
+    "stderr": "",
+    "exception": null
+  },
+  {
+    "name": "links-related",
+    "argv": [
+      "links",
+      "related",
+      "A.md"
+    ],
+    "exit_code": 0,
+    "stdout": "Depth 0: A.md (Alpha)\nDepth 1: Reference.md (Reference)\n",
+    "stderr": "",
+    "exception": null
+  },
+  {
+    "name": "links-related-limited",
+    "argv": [
+      "links",
+      "related",
+      "A.md",
+      "--depth",
+      "1",
+      "--max-nodes",
+      "1"
+    ],
+    "exit_code": 0,
+    "stdout": "Depth 0: A.md (Alpha)\nGraph limit reached; results truncated\n",
+    "stderr": "",
+    "exception": null
+  },
+  {
+    "name": "links-suggest",
+    "argv": [
+      "links",
+      "suggest",
+      "A.md"
+    ],
+    "exit_code": 1,
+    "stdout": "",
+    "stderr": "",
+    "exception": "ConfigError"
+  },
+  {
+    "name": "note-create-declined",
+    "argv": [
+      "note",
+      "create",
+      "Notes/New.md",
+      "--content",
+      "# New\n"
+    ],
+    "exit_code": 0,
+    "stdout": "--- /dev/null\n+++ b/Notes/New.md\n@@ -0,0 +1 @@\n+# New\nApply this change? [y/N]: n\nCancelled\n",
+    "stderr": "",
+    "exception": null
+  },
+  {
+    "name": "note-create-approved",
+    "argv": [
+      "note",
+      "create",
+      "Notes/New.md",
+      "--content",
+      "# New\n"
+    ],
+    "exit_code": 0,
+    "stdout": "--- /dev/null\n+++ b/Notes/New.md\n@@ -0,0 +1 @@\n+# New\nApply this change? [y/N]: y\nApplied\n",
+    "stderr": "",
+    "exception": null
+  },
+  {
+    "name": "note-create-collision",
+    "argv": [
+      "note",
+      "create",
+      "Notes/New.md",
+      "--content",
+      "# New\n"
+    ],
+    "exit_code": 1,
+    "stdout": "",
+    "stderr": "",
+    "exception": "CollisionError"
+  },
+  {
+    "name": "note-update-approved",
+    "argv": [
+      "note",
+      "update",
+      "A.md",
+      "--old",
+      "Alpha body",
+      "--new",
+      "Edited body"
+    ],
+    "exit_code": 0,
+    "stdout": "--- a/A.md\n+++ b/A.md\n@@ -1,3 +1,3 @@\n # Alpha\n \n-Alpha body with a [[Reference]] link.\n+Edited body with a [[Reference]] link.\nApply this change? [y/N]: y\nApplied\n",
+    "stderr": "",
+    "exception": null
+  },
+  {
+    "name": "note-update-span-missing",
+    "argv": [
+      "note",
+      "update",
+      "A.md",
+      "--old",
+      "zzz-not-present",
+      "--new",
+      "x"
+    ],
+    "exit_code": 1,
+    "stdout": "",
+    "stderr": "",
+    "exception": "SafeWriteError"
+  },
+  {
+    "name": "note-frontmatter-approved",
+    "argv": [
+      "note",
+      "frontmatter",
+      "A.md",
+      "--set",
+      "status=done"
+    ],
+    "exit_code": 0,
+    "stdout": "--- a/A.md\n+++ b/A.md\n@@ -1,3 +1,6 @@\n+---\n+status: done\n+---\n # Alpha\n \n Edited body with a [[Reference]] link.\nApply this change? [y/N]: y\nApplied\n",
+    "stderr": "",
+    "exception": null
+  },
+  {
+    "name": "note-frontmatter-bad",
+    "argv": [
+      "note",
+      "frontmatter",
+      "A.md",
+      "--set",
+      "noequals"
+    ],
+    "exit_code": 2,
+    "stdout": "Usage: root note frontmatter [OPTIONS] {path}\nTry 'root note frontmatter --help' for help.\n╭─ Error ──────────────────────────────────────────────────────────────────────╮\n│ Invalid value for --set: Use key=value                                       │\n╰──────────────────────────────────────────────────────────────────────────────╯\n",
+    "stderr": "Usage: root note frontmatter [OPTIONS] {path}\nTry 'root note frontmatter --help' for help.\n╭─ Error ──────────────────────────────────────────────────────────────────────╮\n│ Invalid value for --set: Use key=value                                       │\n╰──────────────────────────────────────────────────────────────────────────────╯\n",
+    "exception": "SystemExit"
+  },
+  {
+    "name": "note-move-approved",
+    "argv": [
+      "note",
+      "move",
+      "A.md",
+      "Notes/Moved.md"
+    ],
+    "exit_code": 0,
+    "stdout": "--- a/A.md\n+++ b/Notes/Moved.md\n(content unchanged; path moves)\nAffected backlinks (1); they will not be rewritten:\n  Reference.md\nAmbiguous WikiLinks left unchanged in:\n  Reference.md\nApply move with 1 affected backlink note(s)? [y/N]: y\nApplied\n",
+    "stderr": "",
+    "exception": null
+  },
+  {
+    "name": "note-trash-approved",
+    "argv": [
+      "note",
+      "trash",
+      "Notes/Moved.md"
+    ],
+    "exit_code": 0,
+    "stdout": "--- a/Notes/Moved.md\n+++ /dev/null\n@@ -1,6 +0,0 @@\n----\n-status: done\n----\n-# Alpha\n-\n-Edited body with a [[Reference]] link.\nTrash destination: .obsai-trash/<UUID>/Notes/Moved.md\nApply this change? [y/N]: y\nApplied\n",
+    "stderr": "",
+    "exception": null
+  },
+  {
+    "name": "transaction-status",
+    "argv": [
+      "transaction",
+      "status"
+    ],
+    "exit_code": 0,
+    "stdout": "No unfinished transactions\n",
+    "stderr": "",
+    "exception": null
+  },
+  {
+    "name": "organize-inbox-cancel",
+    "argv": [
+      "organize",
+      "inbox"
+    ],
+    "exit_code": 0,
+    "stdout": "Inbox proposals: 1 note(s), 0 default selected, 0 conflict(s)\n[1 ] Inbox/Loose.md\n  Move: Leave in Inbox\n  Title: Loose Note\n  Tags: —\n  Links: —\n  Affected backlinks: 0  Confidence: 0%\n  Reason: No related indexed notes in a clear existing directory\n* = included by Apply all; low-confidence and unsafe proposals stay unselected\n[a] Apply all  [s] Select  [v] View diff  [q] Cancel [q]: q\nCancelled\n",
+    "stderr": "",
+    "exception": null
+  },
+  {
+    "name": "ask-no-key",
+    "argv": [
+      "ask",
+      "What is Alpha?"
+    ],
+    "exit_code": 0,
+    "stdout": "Hybrid retrieval degraded: Semantic index missing; run 'obsai index embeddings'\nWarning: Semantic index missing; run 'obsai index embeddings'\n未找到可用于回答的笔记证据。\n",
+    "stderr": "Hybrid retrieval degraded: Semantic index missing; run 'obsai index embeddings'\nWarning: Semantic index missing; run 'obsai index embeddings'\n",
+    "exception": null
+  },
+  {
+    "name": "agent-run-no-key",
+    "argv": [
+      "agent",
+      "run",
+      "Summarize Alpha"
+    ],
+    "exit_code": 0,
+    "stdout": "Hybrid retrieval degraded: Semantic index missing; run 'obsai index embeddings'\n未找到可用于回答的笔记证据。\n",
+    "stderr": "Hybrid retrieval degraded: Semantic index missing; run 'obsai index embeddings'\n",
+    "exception": null
+  },
+  {
+    "name": "agent-resume-unknown",
+    "argv": [
+      "agent",
+      "resume",
+      "deadbeef"
+    ],
+    "exit_code": 1,
+    "stdout": "",
+    "stderr": "",
+    "exception": "ConfigError"
+  },
+  {
+    "name": "note-create-escaping-path",
+    "argv": [
+      "note",
+      "create",
+      "../escape.md",
+      "--content",
+      "x"
+    ],
+    "exit_code": 1,
+    "stdout": "",
+    "stderr": "",
+    "exception": "SafeWriteError"
+  },
+  {
+    "name": "note-create-non-markdown",
+    "argv": [
+      "note",
+      "create",
+      "Notes/file.txt",
+      "--content",
+      "x"
+    ],
+    "exit_code": 1,
+    "stdout": "",
+    "stderr": "",
+    "exception": "SafeWriteError"
+  }
+]
