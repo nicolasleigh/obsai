@@ -10,7 +10,7 @@ from obsai.chunking import chunk_note
 from obsai.cli.app import app
 from obsai.config.models import EmbeddingConfig
 from obsai.embedding.models import EmbeddingGeneration
-from obsai.embedding.pipeline import EmbeddingPipeline
+from obsai.embedding.pipeline import EmbeddingPipeline, PendingText
 from obsai.errors import EmbeddingBudgetError, EmbeddingError, EmbeddingRateLimitError, EmbeddingServiceError
 from obsai.retrieval import SearchFilters, VectorRetriever
 from obsai.storage import Database, IndexRepository, SQLiteVectorStore
@@ -247,12 +247,21 @@ def test_batches_obey_request_and_input_token_limits(tmp_path: Path) -> None:
         assert all(sum(item.tokens for item in batch) <= sum(sizes[:2]) for batch in plan.batches)
         asyncio.run(pipeline.execute(plan, approved=True))
         assert [len(call) for call in provider.calls] == [2, 1]
-        with pytest.raises(EmbeddingError, match="per-input"):
+        with pytest.raises(
+            EmbeddingError,
+            match=r"exceeds per-input token limit \(estimated=\d+, limit=1\)",
+        ):
             EmbeddingPipeline(
                 store,
                 MockProvider(generation("new")),
                 config(max_input_tokens=1),
             )._batches([plan.remote_texts[0]])
+        with pytest.raises(EmbeddingError, match="Embedding input is empty"):
+            EmbeddingPipeline(
+                store,
+                MockProvider(generation("new")),
+                config(),
+            )._batches([PendingText("empty", "  \n", 0)])
 
 
 def test_cli_preflight_consent_and_semantic_json(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

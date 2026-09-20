@@ -144,15 +144,20 @@ class EmbeddingPipeline:
 
         :param items: 待发送的去重文本列表
         :return: 嵌套只读元组，每个子元组代表一个 API 请求批次
-        :raises EmbeddingError: 若单条切片为空、超长或单条超出请求上限
+        :raises EmbeddingError: 若单条切片为空、超出单条输入上限或超出请求上限
         """
         batches: list[tuple[PendingText, ...]] = []
         current: list[PendingText] = []
         total = 0
         for item in items:
-            # 单项防御：拒绝空白文本以及超出单条输入上限的文本（如 8192）
-            if item.tokens > self.config.max_input_tokens or not item.text.strip():
-                raise EmbeddingError("Embedding input is empty or exceeds per-input token limit")
+            # 单项防御：分别报告空白文本与超出单条输入上限，避免调用方无法判断修复方向。
+            if not item.text.strip():
+                raise EmbeddingError("Embedding input is empty")
+            if item.tokens > self.config.max_input_tokens:
+                raise EmbeddingError(
+                    "Embedding input exceeds per-input token limit "
+                    f"(estimated={item.tokens}, limit={self.config.max_input_tokens})"
+                )
             # 单项超出单次请求总容量上限
             if item.tokens > self.config.max_request_tokens:
                 raise EmbeddingError("Embedding input exceeds per-request token limit")
