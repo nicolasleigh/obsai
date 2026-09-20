@@ -415,9 +415,9 @@ export function OrganizePage() {
           <Card className="border-dashed">
             <CardContent className="flex flex-col items-center justify-center p-12 text-center text-muted-foreground">
               <CheckCircle2 className="size-12 mb-3 opacity-30 text-emerald-600" />
-              <h3 className="text-sm font-semibold text-foreground">Inbox 目录已全部整理完毕</h3>
+              <h3 className="text-sm font-semibold text-foreground">暂无待整理笔记</h3>
               <p className="text-xs max-w-md mt-1.5 leading-relaxed">
-                当前 Inbox 目录下没有待分类的 Markdown 笔记。将新收集的碎片笔记放入 Inbox 目录后即可在此发起智能整理与归档。
+                配置的 Inbox 目录尚未创建，或其中没有待分类的 Markdown 笔记。放入新笔记后即可在此发起智能整理与归档。
               </p>
             </CardContent>
           </Card>

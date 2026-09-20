@@ -311,12 +311,14 @@ OpenAI planner 需要 `OPENAI_API_KEY`；测试使用 mock planner，不发起�
 ## Inbox 整理器
 
 在 `obsai index update` 之后运行 `obsai organize inbox`。默认扫描 `Inbox/`；用以下配置
-指定另一个已存在的、相对于 Vault 的目录：
+指定另一个相对于 Vault 的目录：
 
 ```toml
 [organize]
 inbox = "Capture"
 ```
+
+如果配置的目录尚未创建，扫描会正常返回空提案，且不会自动创建该目录。
 
 整理器会解析每条笔记，搜索已索引的相关笔记，并提出一个已存在的目标目录、基于标题的文件
 名、来自相关笔记的标签，以及指向至多两条相关笔记的显式 WikiLink。它绝不创建新的分类

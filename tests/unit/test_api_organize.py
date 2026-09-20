@@ -135,6 +135,29 @@ def test_post_organize_proposals_empty_inbox(tmp_path: Path) -> None:
         assert preview["default_numbers"] == []
 
 
+def test_post_organize_proposals_missing_inbox_is_empty(tmp_path: Path) -> None:
+    vault = make_vault(
+        tmp_path,
+        {
+            "Backend/Redis.md": "# Redis\n\nRedis docs.\n",
+        },
+    )
+    db_path = tmp_path / "index.db"
+    app = build_app(vault, db_path)
+
+    with TestClient(app, base_url=BASE_URL) as client:
+        res = client.post("/api/v1/organize/proposals")
+        assert res.status_code == 200
+        assert res.json() == {
+            "proposals": [],
+            "inbox": "Inbox",
+            "default_numbers": [],
+        }
+
+    # 提案接口是只读的：空扫描不会顺手创建用户的 Inbox。
+    assert not (vault / "Inbox").exists()
+
+
 def test_post_organize_plan_success(tmp_path: Path) -> None:
     vault = make_vault(
         tmp_path,

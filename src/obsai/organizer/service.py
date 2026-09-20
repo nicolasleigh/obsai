@@ -113,20 +113,27 @@ class InboxOrganizer:
 
         执行流程：
         1. 检查事务日志就绪性（确保无挂起的未提交事务）；
-        2. 校验收件箱目录物理有效性（拒绝软链接）；
+        2. 校验收件箱目录物理有效性（拒绝软链接；尚未创建时视为空目录）；
         3. 扫描全库文件，提取位于收件箱内的待整理笔记；
         4. 逐篇进行单文件推断（_propose_one）；
         5. 全局碰撞检测：若多篇收件箱笔记被建议移至相同目标路径，统一打上 issue 标记阻断自动执行。
 
         :return: 所有待整理笔记的提案列表
-        :raises ConfigError: 收件箱不存在或为非法符号链接时抛出
+        :raises ConfigError: 收件箱路径已被非目录或符号链接占用时抛出
         """
         # 1. 事务就绪性检查
         self.transaction.ensure_ready()
         inbox_root = self.vault / self.inbox
         # 2. 验证收件箱物理目录
-        if not inbox_root.is_dir() or inbox_root.is_symlink():
-            raise ConfigError(f"Inbox directory does not exist: {self.inbox}")
+        if inbox_root.is_symlink():
+            raise ConfigError(f"Inbox directory must not be a symlink: {self.inbox}")
+        if not inbox_root.exists():
+            # Inbox 是用户数据目录，只读扫描不应为了“修复”它而创建目录。
+            # 尚未创建和已创建但没有 Markdown 笔记对提案来说语义相同：
+            # 都是一次成功的空扫描。
+            return []
+        if not inbox_root.is_dir():
+            raise ConfigError(f"Inbox path is not a directory: {self.inbox}")
         # 3. 扫描知识库，提取收件箱内的待处理 Markdown 笔记
         scanned = scan_markdown_files(self.vault)
         paths = [path for path in scanned
@@ -311,4 +318,3 @@ class InboxOrganizer:
         :return: 事务执行结果（包含变更统计与反链更新明细）
         """
         return self.transaction.execute(plan, approved=True)
-

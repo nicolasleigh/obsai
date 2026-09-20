@@ -368,12 +368,15 @@ process restart as long as both agent SQLite files remain available.
 ## Inbox organizer
 
 Run `obsai organize inbox` after `obsai index update`. By default it scans
-`Inbox/`; configure another existing Vault-relative directory with:
+`Inbox/`; configure another Vault-relative directory with:
 
 ```toml
 [organize]
 inbox = "Capture"
 ```
+
+If the configured directory has not been created yet, the scan succeeds with no
+proposals and does not create it.
 
 The organizer parses each note, searches indexed related notes, and proposes
 an existing destination directory, title-based filename, tags from related
