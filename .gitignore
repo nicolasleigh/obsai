@@ -8,3 +8,5 @@ build/
 .workbuddy-ai/
 .idea/
 .DS_Store
+obsai.toml
+.obsai/

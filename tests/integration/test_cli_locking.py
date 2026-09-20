@@ -57,13 +57,14 @@ def environment(tmp_path: Path) -> dict[str, str]:
     env.pop("OPENAI_API_KEY", None)
     for name in [key for key in env if key.startswith("OBSAI_")]:
         env.pop(name)
+    env["OBSAI_CONFIG_PATH"] = str(tmp_path / "home" / "config" / "obsai" / "config.toml")
     return env
 
 
 def run(tmp_path: Path, argv: list[str], stdin: str | None = None) -> subprocess.CompletedProcess:
     return subprocess.run(
         [str(OBSAI), *argv],
-        cwd=REPO,
+        cwd=tmp_path / "home",
         env=environment(tmp_path),
         input=stdin,
         capture_output=True,

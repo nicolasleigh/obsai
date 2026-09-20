@@ -125,6 +125,7 @@ def prepare(root: Path) -> None:
     os.environ.pop("OPENAI_API_KEY", None)
     for name in [n for n in os.environ if n.startswith("OBSAI_")]:
         os.environ.pop(name, None)
+    os.environ["OBSAI_CONFIG_PATH"] = str(config)
 
 
 def collect(root: Path) -> list[dict]:

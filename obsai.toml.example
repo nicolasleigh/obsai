@@ -1,0 +1,63 @@
+# ==============================================================================
+# ObsAI 本地配置文件模版 (obsai.toml.example)
+# ==============================================================================
+# 使用方法：
+#   cp obsai.toml.example obsai.toml
+#   然后根据需要修改 obsai.toml 中的路径与模型参数。
+#
+# 查找优先级说明：
+#   1. 环境变量 OBSAI_CONFIG_PATH 显式指定的路径（最高优先级）
+#   2. 当前工作目录（CWD）下的本地配置：obsai.toml 或 .obsai/config.toml（就近优先）
+#   3. 用户全局配置：~/.config/obsai/config.toml（全局兜底）
+#   4. 内置默认值
+# ==============================================================================
+
+[vault]
+# 你的 Obsidian 知识库真实物理根目录（必填项，亦可通过 CLI 参数指定）
+path = "/path/to/your/ObsidianVault"
+
+[index]
+# SQLite 索引数据库存放物理路径（可选，缺省为 <vault_root>/.obsai/index.db）
+# database = "/path/to/your/index.db"
+
+[embedding]
+# 向量模型提供商（支持 "openai" 或兼容 OpenAI API 的本地/远程端点，如 Ollama）
+provider = "openai"
+# 向量模型名称
+model = "text-embedding-3-small"
+# 向量模型版本标识（可选）
+# model_version = "v1"
+# 向量输出维度（必须与模型实际输出维度严格一致）
+dimensions = 1536
+# 单批次提交处理的切片数（1 ~ 2048）
+batch_size = 64
+# 请求并发数控制
+max_concurrency = 2
+# 单切片最大输入 Token 长度（硬上限 8192）
+max_input_tokens = 8192
+# 请求超时时间（秒）
+timeout_seconds = 30
+# 失败重试次数
+max_attempts = 4
+# 每百万 Token 单价（美元，设为 0 时不计算金额花费，适合本地模型）
+price_per_million_tokens_usd = 0.02
+
+[ask]
+# 问答与智能体决策大模型提供商（支持 "openai" 或兼容 OpenAI API 的服务）
+provider = "openai"
+# 问答使用的模型名称
+model = "gpt-4.1-mini"
+# LLM 请求超时时间（秒）
+timeout_seconds = 60
+# 最大生成 Token 数
+max_output_tokens = 1024
+# 上下文总 Token 预算上限（包含系统 Prompt、检索切片与提问）
+max_context_tokens = 12000
+# 注入到 Prompt 中的检索证据切片文本最大 Token 预算
+max_evidence_tokens = 2500
+# 单次回答精选注入的相关切片条数上限
+max_chunks = 6
+
+[organize]
+# 收件箱相对目录名（基于 Vault 根目录的相对安全路径，默认 "Inbox"）
+inbox = "Inbox"
