@@ -102,6 +102,7 @@ def test_ollama_answer_provider_uses_chat_completions(monkeypatch) -> None:
     answer = asyncio.run(provider.generate("system", "question", max_output_tokens=20))
 
     assert answer == "local answer"
+    assert _FakeAsyncClient.last_kwargs["api_key"] == "ollama"
 
 
 def test_ollama_planner_returns_structured_tool_decision(monkeypatch) -> None:

@@ -55,9 +55,11 @@ class Provider:
         return self.output
 
 
-def service(results: list[SearchResult], records: list[EvidenceRecord], provider: Provider, **config) -> AskService:
+def service(results: list[SearchResult], records: list[EvidenceRecord], llm_provider: Provider, **config) -> AskService:
     settings = AskConfig(**config)
-    return AskService(Retriever(results), ContextBuilder(Records(records), settings), provider, settings)
+    return AskService(
+        Retriever(results), ContextBuilder(Records(records), settings), llm_provider, settings
+    )
 
 
 def test_context_budget_dedupe_order_and_metadata() -> None:
@@ -93,6 +95,26 @@ def test_answer_uses_only_cited_evidence() -> None:
     assert answer.text == "It waits for requests. [S1]"
     assert [source.record.path for source in answer.sources] == ["Go/context.md"]
     assert provider.calls == 1
+
+
+@pytest.mark.parametrize("citation", ["【S1】", "（S1）", "(S1)"])
+def test_local_citation_variants_are_normalized(citation: str) -> None:
+    answer = service(
+        [result("c1")], [record("c1")], Provider(f"事实 {citation}"), provider="ollama"
+    ).ask("How?")
+    assert answer.text == "事实 [S1]"
+    assert [source.citation_id for source in answer.sources] == ["S1"]
+
+
+def test_hidden_thinking_cannot_supply_the_only_citation() -> None:
+    answer = service(
+        [result("c1")],
+        [record("c1")],
+        Provider("<think>推理 [S1]</think>没有引用"),
+        provider="ollama",
+    ).ask("How?")
+    assert answer.abstained
+    assert not answer.sources
 
 
 def test_sources_include_only_citations_actually_used() -> None:

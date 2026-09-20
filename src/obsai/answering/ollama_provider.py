@@ -35,6 +35,10 @@ class OllamaLLMProvider:
                         {"role": "user", "content": user_prompt},
                     ],
                     max_tokens=max_output_tokens,
+                    # Citation formatting is important for acceptance and a
+                    # deterministic local generation is much less likely to
+                    # omit it than Ollama's default sampling temperature.
+                    temperature=0,
                 )
         except APITimeoutError as exc:
             raise LLMError("Ollama answer request timed out") from exc

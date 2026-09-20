@@ -2,7 +2,7 @@
 
 import asyncio
 
-from obsai.answering.citation import validate_citations
+from obsai.answering.citation import normalize_citations
 from obsai.answering.context import ContextBuilder
 from obsai.answering.models import Answer, LLMProvider
 from obsai.config.models import AskConfig
@@ -10,6 +10,14 @@ from obsai.errors import LLMError, ObsAIError
 from obsai.retrieval.hybrid import HybridRetriever
 from obsai.retrieval.models import SearchFilters
 from obsai.telemetry import measure, metric
+
+
+LOCAL_CITATION_REPAIR_INSTRUCTIONS = (
+    "\n\nCitation repair is required. The previous draft did not contain a valid "
+    "citation. Rewrite it using only the supplied evidence. Every factual "
+    "sentence must end with one exact citation copied from an evidence label, "
+    "such as [S1]. Return only the final answer; do not explain this instruction."
+)
 
 
 class AskService:
@@ -41,15 +49,32 @@ class AskService:
                         max_output_tokens=self.config.max_output_tokens,
                     )
                 )
+                # Small local chat models often answer correctly but omit the
+                # citation marker on their first pass.  Give Ollama one bounded
+                # repair pass; remote providers keep the original one-call
+                # behaviour and cost profile.
+                if self.config.provider == "ollama" and normalize_citations(
+                    response, context.evidence
+                ) is None:
+                    response = asyncio.run(
+                        self.provider.generate(
+                            context.system_prompt + LOCAL_CITATION_REPAIR_INSTRUCTIONS,
+                            context.user_prompt
+                            + "\n\nPrevious draft (rewrite it with citations):\n"
+                            + response.strip(),
+                            max_output_tokens=self.config.max_output_tokens,
+                        )
+                    )
         except ObsAIError:
             raise
         except Exception as exc:
             raise LLMError(f"Answer provider failed: {type(exc).__name__}: {exc}") from exc
-        sources = validate_citations(response, context.evidence)
-        if sources is None:
+        normalized = normalize_citations(response, context.evidence)
+        if normalized is None:
             return Answer(
                 "无法从检索到的证据生成带有效引用的回答。",
                 warnings=(*outcome.warnings, "Model answer had missing or invalid citations"),
                 abstained=True,
             )
-        return Answer(response.strip(), sources, outcome.warnings)
+        answer_text, sources = normalized
+        return Answer(answer_text, sources, outcome.warnings)
