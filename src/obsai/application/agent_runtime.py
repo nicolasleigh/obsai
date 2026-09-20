@@ -13,6 +13,7 @@ import sqlite3
 from pathlib import Path
 
 from obsai.agent.openai_planner import OpenAIDecisionProvider
+from obsai.agent.ollama_planner import OllamaDecisionProvider
 from obsai.agent.store import ArtifactStore
 from obsai.agent.tools import AgentTools
 from obsai.agent.workflow import AgentWorkflow
@@ -103,10 +104,19 @@ def build_runtime(
                 [source.record.chunk_id for source in answer.sources],
             )
 
+        if settings.ask.provider == "openai":
+            decision_provider = OpenAIDecisionProvider(settings.ask)
+        elif settings.ask.provider == "ollama":
+            decision_provider = OllamaDecisionProvider(settings.ask)
+        else:
+            from obsai.errors import ConfigError
+
+            raise ConfigError(f"Unsupported planner provider: {settings.ask.provider}")
+
         workflow = AgentWorkflow(
             AgentTools(database_path, settings.vault.path, retriever, artifacts),
             artifacts,
-            OpenAIDecisionProvider(settings.ask),
+            decision_provider,
             checkpointer=checkpointer,
             answer_question=answer_question,
         )

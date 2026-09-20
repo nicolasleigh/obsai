@@ -68,8 +68,9 @@ class SearchResponse(SearchOutcome):
     same way ``StatusResponse`` extends ``StatusView``.
     """
 
-    #: ``None`` for keyword mode (nothing was probed). Otherwise exactly one of
-    #: ``consent`` / ``reason`` is set — see :class:`SemanticProbe`.
+    #: ``None`` for keyword mode (nothing was probed). A remote probe sets one of
+    #: ``consent`` / ``reason``; a local Ollama probe may intentionally leave both
+    #: empty — see :class:`SemanticProbe`.
     semantic: SemanticProbe | None = None
 
 

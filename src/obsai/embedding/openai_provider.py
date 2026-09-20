@@ -45,7 +45,12 @@ class OpenAIEmbeddingProvider:
     负责将分块切片文本转换为与指定代际（EmbeddingGeneration）兼容的高维稠密向量。
     """
 
-    def __init__(self, generation: EmbeddingGeneration, timeout_seconds: float):
+    def __init__(
+        self,
+        generation: EmbeddingGeneration,
+        timeout_seconds: float,
+        base_url: str | None = None,
+    ):
         """初始化 OpenAI 向量提供商适配器。
 
         :param generation: 向量代际配置（必须声明 provider="openai"）
@@ -56,6 +61,7 @@ class OpenAIEmbeddingProvider:
             raise ConfigError(f"Unsupported embedding provider: {generation.provider}")
         self.generation = generation
         self.timeout_seconds = timeout_seconds
+        self.base_url = base_url
 
     async def embed(self, texts: list[str]) -> list[list[float]]:
         """异步批量将文本列表转换为对应维度的浮点数向量列表。
@@ -81,7 +87,10 @@ class OpenAIEmbeddingProvider:
         # 使用异步上下文管理器管理 AsyncOpenAI 客户端，确保 HTTP 连接池资源能被安全及时释放
         # 设置 max_retries=0，交由上层 pipeline 统筹管理重试和限流
         async with AsyncOpenAI(
-            api_key=key, timeout=self.timeout_seconds, max_retries=0
+            api_key=key,
+            base_url=self.base_url,
+            timeout=self.timeout_seconds,
+            max_retries=0,
         ) as client:
             try:
                 response = await client.embeddings.create(

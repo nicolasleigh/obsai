@@ -3,8 +3,9 @@
  *
  * 不碰 React、不碰 fetch。判定全部基于**结构化字段**——`semantic.consent`
  * （存在即"可以批准"）、`semantic.failure`（"不可批准"，原因在枚举里）、以及调用方
- * 是否已经带过批准。`reason` 是给人看的散文，两种成因读起来几乎一样，拿它分支迟早
- * 会错；B-5 已经为这件事立过规矩，这里只是照着做。
+ * 是否已经带过批准。Ollama 等本地 provider 会返回两个空字段，表示无需批准即可使用；
+ * 其余远程路径仍按同意状态判断。`reason` 是给人看的散文，两种成因读起来几乎一样，
+ * 拿它分支迟早会错；B-5 已经为这件事立过规矩，这里只是照着做。
  *
  * 唯一一处不得不认字的地方写在 `NOT_APPROVED` 旁边。
  */
@@ -20,7 +21,7 @@ import type { ApiError } from './errors'
 /**
  * 服务端在"这次查询没有有效批准"时给出的原话。
  *
- * 认字符串是下策，这里没有更好的选择：服务端**总是**返回挑战（只要探针成功），
+ * 认字符串是下策，这里没有更好的选择：远程服务端**总是**返回挑战（只要探针成功），
  * 所以"带了批准却仍被要求批准"这件事在响应里没有别的痕迹。`approved` 与
  * `rejected` 的差别对用户是有意义的——一个说"正在用语义检索"，另一个说"你批准
  * 的那次已经不适用了，因为查询或索引变了"——所以不能合并掉了事。
@@ -64,8 +65,8 @@ export function consentOutcome(
   const semantic = response?.semantic
   if (!semantic) return { kind: 'not_needed' }
   if (semantic.consent === null) {
-    // 契约保证 `consent` 为空时 `failure` 非空；真拿到一个两头都空的探针，
-    // 当作"没有语义腿"比当作"可以批准"安全——后者会让页面显示一个点不动的按钮。
+    // 本地 Ollama 有意返回两个空字段，表示可以直接使用；远程 provider 在这里
+    // 才会携带 failure。两种情况都不应显示一个点不动的批准按钮。
     return semantic.failure === null
       ? { kind: 'not_needed' }
       : { kind: 'unavailable', failure: semantic.failure }

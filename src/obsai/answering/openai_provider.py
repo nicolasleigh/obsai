@@ -25,7 +25,10 @@ class OpenAILLMProvider:
             raise MissingCredentialError("OPENAI_API_KEY is required for remote answers")
         try:
             async with AsyncOpenAI(
-                api_key=key, timeout=self.config.timeout_seconds, max_retries=0
+                api_key=key,
+                base_url=self.config.base_url,
+                timeout=self.config.timeout_seconds,
+                max_retries=0,
             ) as client:
                 response = await client.responses.create(
                     model=self.config.model, instructions=system_prompt,

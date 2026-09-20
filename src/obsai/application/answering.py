@@ -10,6 +10,7 @@ from __future__ import annotations
 from obsai.answering.context import ContextBuilder
 from obsai.answering.models import Answer, EvidenceRecord
 from obsai.answering.openai_provider import OpenAILLMProvider
+from obsai.answering.ollama_provider import OllamaLLMProvider
 from obsai.answering.service import AskService
 from obsai.application.dto import (
     AskOutcome,
@@ -69,7 +70,7 @@ def build_hybrid_retriever(
     probe: SemanticProbe,
     approval: ConsentApproval | None = None,
 ) -> HybridRetriever:
-    """Hybrid retriever whose semantic half is present only when approved."""
+    """Hybrid retriever whose remote semantic half is present only when approved."""
     semantic = None
     reason = probe.reason or SEMANTIC_NOT_APPROVED
     if probe.consent is not None:
@@ -77,6 +78,8 @@ def build_hybrid_retriever(
             semantic = build_semantic_retriever(database, settings)
         else:
             reason = SEMANTIC_NOT_APPROVED
+    elif probe.reason == "" and settings.embedding.provider == "ollama":
+        semantic = build_semantic_retriever(database, settings)
     return HybridRetriever(
         FTSRetriever(database), semantic, semantic_unavailable_reason=reason
     )
@@ -84,10 +87,18 @@ def build_hybrid_retriever(
 
 def build_ask_service(database: Database, settings: Settings, retriever) -> AskService:
     """Assemble the answering service against an open index and a retriever."""
+    if settings.ask.provider == "openai":
+        provider = OpenAILLMProvider(settings.ask)
+    elif settings.ask.provider == "ollama":
+        provider = OllamaLLMProvider(settings.ask)
+    else:
+        from obsai.errors import ConfigError
+
+        raise ConfigError(f"Unsupported answer provider: {settings.ask.provider}")
     return AskService(
         retriever,
         ContextBuilder(SQLiteEvidenceRepository(database), settings.ask),
-        OpenAILLMProvider(settings.ask),
+        provider,
         settings.ask,
     )
 

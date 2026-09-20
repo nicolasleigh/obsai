@@ -139,6 +139,11 @@ class EmbeddingPipeline:
                 and requests > self.config.max_embedding_requests):
             raise EmbeddingBudgetError("Embedding requests exceed budget")
 
+    @property
+    def requires_remote_approval(self) -> bool:
+        """Whether sending this generation outside the machine needs consent."""
+        return self.generation.provider != "ollama"
+
     def _batches(self, items: list[PendingText]) -> tuple[tuple[PendingText, ...], ...]:
         """贪心分批装箱算法：依据 batch_size 与 max_request_tokens 双重约束切分批次。
 
@@ -290,8 +295,8 @@ class EmbeddingPipeline:
         # 前置断言：严禁跨代际执行
         if plan.generation != self.generation:
             raise EmbeddingError("Plan belongs to a different embedding generation")
-        # 显式审批闸门：只要包含远程网络请求，必须显式审批，防止未授权计费
-        if plan.request_count and not approved:
+        # 显式审批闸门：只有远程请求必须显式审批；Ollama stays on the local machine.
+        if plan.request_count and self.requires_remote_approval and not approved:
             raise EmbeddingError("Remote embeddings require explicit approval")
 
         # 预先开辟插槽列表，使得并发返回结果能够按原始批次编号精确定位
@@ -369,7 +374,7 @@ class EmbeddingPipeline:
         :return: 浮点数向量
         :raises EmbeddingError: 未经审批
         """
-        if not approved:
+        if self.requires_remote_approval and not approved:
             raise EmbeddingError("Remote query embedding requires explicit approval")
         tokens = self.count_tokens(query)
         # 借用分批逻辑对单条查询执行输入长度合规性检查

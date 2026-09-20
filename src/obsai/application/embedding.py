@@ -11,7 +11,9 @@ from __future__ import annotations
 from obsai.config.models import EmbeddingConfig, Settings
 from obsai.embedding.models import EmbeddingGeneration
 from obsai.embedding.openai_provider import OpenAIEmbeddingProvider
+from obsai.embedding.ollama_provider import OllamaEmbeddingProvider
 from obsai.embedding.pipeline import EmbeddingPipeline
+from obsai.errors import ConfigError
 from obsai.storage.database import Database
 from obsai.storage.vectors import SQLiteVectorStore
 
@@ -36,6 +38,15 @@ def build_embedding_pipeline(
     """Assemble the vector store and its pipeline against an open index."""
     config = settings.embedding
     generation = build_generation(config)
-    provider = OpenAIEmbeddingProvider(generation, config.timeout_seconds)
+    if config.provider == "openai":
+        provider = OpenAIEmbeddingProvider(
+            generation, config.timeout_seconds, base_url=config.base_url
+        )
+    elif config.provider == "ollama":
+        provider = OllamaEmbeddingProvider(
+            generation, config.timeout_seconds, base_url=config.base_url
+        )
+    else:
+        raise ConfigError(f"Unsupported embedding provider: {config.provider}")
     store = SQLiteVectorStore(database)
     return store, EmbeddingPipeline(store, provider, config)

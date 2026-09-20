@@ -97,11 +97,11 @@ describe('consentOutcome', () => {
     })
   })
 
-  it('两头都空的畸形探针当作没有语义腿，而不是可以批准', () => {
-    // 契约保证不会出现，但真出现时"显示一个点不动的批准按钮"比"不显示"糟得多。
-    const broken = response({ semantic: { consent: null, reason: '', failure: null } })
+  it('本地 provider 的空同意字段不显示批准按钮', () => {
+    // Ollama 不会把查询发出本机；与远程 provider 不同，它有意返回两个空字段。
+    const local = response({ semantic: { consent: null, reason: '', failure: null } })
 
-    expect(consentOutcome(broken, null)).toEqual({ kind: 'not_needed' })
+    expect(consentOutcome(local, null)).toEqual({ kind: 'not_needed' })
   })
 })
 

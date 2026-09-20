@@ -318,14 +318,16 @@ def index_embeddings() -> None:
             console.print(f"Estimated tokens: {plan.estimated_tokens}")
             console.print(f"Estimated requests: {plan.request_count}")
             console.print(f"Estimated cost: ${plan.estimated_cost_usd:.6f}")
-            if plan.request_count and not typer.confirm("Proceed with remote embeddings?", default=False):
-                raise typer.Exit(1)
+            approved = True
+            if plan.request_count and settings.embedding.provider != "ollama":
+                if not typer.confirm("Proceed with remote embeddings?", default=False):
+                    raise typer.Exit(1)
             from obsai.shutdown import defer_shutdown
 
             # Signal handlers mark cancellation while an async request is in flight;
             # workers stop before scheduling the next batch.
             with defer_shutdown():
-                attached = asyncio.run(pipeline.execute(plan, approved=bool(plan.request_count)))
+                attached = asyncio.run(pipeline.execute(plan, approved=approved))
             console.print(f"Vectors attached: {attached}")
 
 

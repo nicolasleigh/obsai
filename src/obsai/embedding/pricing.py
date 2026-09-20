@@ -27,6 +27,8 @@ OPENAI_EMBEDDING_USD_PER_MILLION = {
     "text-embedding-3-large": Decimal("0.13"),  # 0.13 美元 / 100 万 Tokens
 }
 
+LOCAL_EMBEDDING_PROVIDERS = {"ollama"}
+
 
 def price_per_million(provider: str, model: str, override: float | None) -> Decimal:
     """计算并返回指定模型每百万输入 Token 的美元单价。
@@ -50,6 +52,12 @@ def price_per_million(provider: str, model: str, override: float | None) -> Deci
     # 优先级 2：匹配内置的官方基准单价
     if provider == "openai" and model in OPENAI_EMBEDDING_USD_PER_MILLION:
         return OPENAI_EMBEDDING_USD_PER_MILLION[model]
+
+    # Ollama runs on the local machine, so its embedding requests do not incur
+    # provider charges. Keep the estimate explicit rather than requiring users
+    # to add a meaningless price override for every local model.
+    if provider in LOCAL_EMBEDDING_PROVIDERS:
+        return Decimal("0")
 
     # 优先级 3：防御性熔断，拒绝隐式估价，防止未知模型在用户无感知情况下产生账单
     raise ConfigError(

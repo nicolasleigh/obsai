@@ -44,6 +44,7 @@ class EmbeddingConfig(BaseModel):
     provider: str = "openai"  # 向量模型提供商（默认 openai）
     model: str = "text-embedding-3-small"  # 向量模型名称
     model_version: str | None = None  # 模型版本号（可选）
+    base_url: str | None = None  # OpenAI 兼容端点（Ollama 默认读取 OLLAMA_BASE_URL）
     dimensions: int = Field(default=1536, gt=0)  # 向量输出维度（必须大于 0）
     batch_size: int = Field(default=64, gt=0, le=2048)  # 单批次提交的切片数量（1 ~ 2048）
     max_concurrency: int = Field(default=2, gt=0)  # API 最大并发请求数（控制并发限流）
@@ -66,6 +67,7 @@ class AskConfig(BaseModel):
 
     provider: str = "openai"  # 问答/规划模型提供商
     model: str = "gpt-4.1-mini"  # 问答与规划使用的大模型名称
+    base_url: str | None = None  # OpenAI 兼容端点（Ollama 默认读取 OLLAMA_BASE_URL）
     timeout_seconds: float = Field(default=60, gt=0)  # 单次 LLM 请求超时时间（秒）
     max_output_tokens: int = Field(default=1024, gt=0)  # 模型生成内容的最大 Token 上限
     max_context_tokens: int = Field(default=12000, gt=0)  # 组装到 Prompt 里的总上下文 Token 预算上限

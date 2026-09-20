@@ -175,17 +175,38 @@ that scale.
 ## Semantic retrieval
 
 First run `obsai index update`, then `obsai index embeddings`. The embedding
-command prints the number of unique texts requiring remote generation, cache
+command prints the number of unique texts requiring provider generation, cache
 reuse, conservative token upper bound, request count, and estimated cost. It
-requires an interactive confirmation before sending text to OpenAI. Set
-`OPENAI_API_KEY` in the environment for approved calls. Tests use a mock provider
-and never send real notes or queries to OpenAI. Semantic search also asks before
-sending its query for embedding. There is no automatic local-provider fallback.
+requires an interactive confirmation before sending text to a remote provider.
+Set `OPENAI_API_KEY` in the environment for OpenAI calls. Tests use a mock
+provider and never send real notes or queries to OpenAI. The provider is explicit;
+the application does not silently fall back between OpenAI and Ollama.
 
-For local development, copy `.env.example` to `.env` and fill in
-`OPENAI_API_KEY`. `make dev` and `make api` load the file automatically; an
-already-exported shell variable takes precedence. The local `.env` is ignored by
-Git and must never be committed.
+For local development, copy `.env.example` to `.env`. `make dev` and `make api`
+load the file automatically; an already-exported shell variable takes
+precedence. The local `.env` is ignored by Git and must never be committed.
+
+To run the full stack locally with Ollama, start Ollama and pull one embedding
+model plus one chat model, then set both providers to `ollama`:
+
+```toml
+[embedding]
+provider = "ollama"
+model = "<embedding-model-from-ollama-list>"
+dimensions = <embedding-model-output-dimensions>
+
+[ask]
+provider = "ollama"
+model = "<chat-model-from-ollama-list>"
+```
+
+The default local endpoint is `http://127.0.0.1:11434/v1`; override it with
+`OLLAMA_BASE_URL` or the `base_url` field. Ollama's local OpenAI-compatible API
+requires only the placeholder key `ollama`, not `OPENAI_API_KEY`. Local semantic
+queries do not open the remote-consent dialog. Rebuild embeddings after changing
+the embedding provider, model, or dimensions. See the
+[Ollama OpenAI compatibility documentation](https://docs.ollama.com/api/openai-compatibility)
+for model and endpoint details.
 
 The optional config fields are:
 
@@ -194,6 +215,7 @@ The optional config fields are:
 provider = "openai"
 model = "text-embedding-3-small"
 model_version = "text-embedding-3-small"
+# base_url = "http://127.0.0.1:11434/v1"  # Ollama/OpenAI-compatible endpoint
 dimensions = 1536
 batch_size = 64
 max_concurrency = 2
@@ -261,6 +283,7 @@ metadata. The CLI prints only sources cited in the accepted answer.
 [ask]
 provider = "openai"
 model = "gpt-4.1-mini"
+# base_url = "http://127.0.0.1:11434/v1"  # Ollama/OpenAI-compatible endpoint
 timeout_seconds = 60
 max_output_tokens = 1024
 max_context_tokens = 12000

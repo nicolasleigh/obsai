@@ -150,10 +150,29 @@ FTS 行。本阶段不使用 LLM 或语义检索。测试套件包含一个小�
 ## 语义检索
 
 先运行 `obsai index update`，再运行 `obsai index embeddings`。embedding 命令会打印需要
-远程生成的唯一文本数量、缓存复用情况、保守的 token 上界、请求数量以及估算成本。它在把
-文本发送给 OpenAI 之前需要交互式确认。为经批准的调用在环境中设置 `OPENAI_API_KEY`。
-测试使用 mock provider，绝不把真实笔记或查询发送给 OpenAI。语义搜索同样会在发送查询做
-embedding 之前询问。不存在自动的本地 provider 回退。
+生成的唯一文本数量、缓存复用情况、保守的 token 上界、请求数量以及估算成本。使用 OpenAI
+时，在环境中设置 `OPENAI_API_KEY`，并在把文本发送到远程服务前确认；使用 Ollama 时，
+向量和查询都留在本机，不需要远程同意对话框。
+
+要完整使用本地 Ollama，请启动 Ollama 并准备一个 embedding 模型和一个聊天模型，然后在
+`obsai.toml` 中同时设置：
+
+```toml
+[embedding]
+provider = "ollama"
+model = "<ollama list 中的 embedding 模型>"
+dimensions = <该模型的实际输出维度>
+
+[ask]
+provider = "ollama"
+model = "<ollama list 中的聊天模型>"
+```
+
+默认本地端点为 `http://127.0.0.1:11434/v1`，也可以通过 `.env` 中的
+`OLLAMA_BASE_URL` 或配置中的 `base_url` 覆盖。Ollama 本地兼容接口要求一个会被忽略的
+占位 Key `ollama`，不需要 `OPENAI_API_KEY`。更换 embedding provider、模型或维度后，必须
+重新生成向量索引。详见
+[Ollama OpenAI 兼容接口文档](https://docs.ollama.com/api/openai-compatibility)。
 
 可选配置字段为：
 
@@ -162,6 +181,7 @@ embedding 之前询问。不存在自动的本地 provider 回退。
 provider = "openai"
 model = "text-embedding-3-small"
 model_version = "text-embedding-3-small"
+# base_url = "http://127.0.0.1:11434/v1"  # Ollama/OpenAI 兼容端点
 dimensions = 1536
 batch_size = 64
 max_concurrency = 2
@@ -219,6 +239,7 @@ FTS 片段绝不会被用作证据。ContextBuilder 保留排序后的结果、�
 [ask]
 provider = "openai"
 model = "gpt-4.1-mini"
+# base_url = "http://127.0.0.1:11434/v1"  # Ollama/OpenAI 兼容端点
 timeout_seconds = 60
 max_output_tokens = 1024
 max_context_tokens = 12000
@@ -226,13 +247,12 @@ max_evidence_tokens = 2500
 max_chunks = 6
 ```
 
-为获得真实回答，请设置 `OPENAI_API_KEY`。若存在可用的向量代，CLI 会像混合检索那样在
-embedding 查询前请求确认。缺失或失败的语义后端会被报告，并改用关键词结果。没有证据时，
-CLI 会在不调用 LLM 的情况下弃答。若模型返回未知的引用 ID 或没有引用，其回答会被丢弃并
-显示弃答。限制使用 UTF-8 字节长度作为保守的、离线的 token 上界，可能比模型分词器允许的
-证据更少。过长的证据会被可见地截断。引用检查只校验来源 ID，而不校验每一句自然语言陈述
-是否忠实转述了其来源；prompt 要求给出有依据、带引用的回答。测试会替换 LLM 适配器，不发起
-远程调用。Vault 保持只读。
+使用 OpenAI 时请设置 `OPENAI_API_KEY`；使用 Ollama 时无需 OpenAI 凭证。缺失或失败的语义
+后端会被报告，并改用关键词结果。没有证据时，CLI 会在不调用 LLM 的情况下弃答。若模型返回
+未知的引用 ID 或没有引用，其回答会被丢弃并显示弃答。限制使用 UTF-8 字节长度作为保守的、
+离线的 token 上界，可能比模型分词器允许的证据更少。过长的证据会被可见地截断。引用检查只
+校验来源 ID，而不校验每一句自然语言陈述是否忠实转述了其来源；prompt 要求给出有依据、带
+引用的回答。测试会替换 LLM 适配器，不发起远程调用。Vault 保持只读。
 
 ## 安全的单笔记写入
 

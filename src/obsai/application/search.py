@@ -39,6 +39,7 @@ from obsai.storage.database import Database
 SEMANTIC_INDEX_MISSING = "Semantic index missing; run 'obsai index embeddings'"
 SEMANTIC_NOT_APPROVED = "Semantic query was not approved"
 SEMANTIC_BACKEND_UNAVAILABLE = "Semantic backend unavailable ({kind}: {detail})"
+LOCAL_EMBEDDING_PROVIDERS = {"ollama"}
 
 #: How long an approval prompt stays usable. Long enough to read the cost, short
 #: enough that a forgotten dialog cannot authorize a query much later.
@@ -49,6 +50,11 @@ def hash_query(query: str) -> str:
     return hashlib.sha256(query.encode("utf-8")).hexdigest()
 
 
+def _uses_local_embeddings(settings: Settings) -> bool:
+    """Local providers do not need a user consent round-trip before querying."""
+    return settings.embedding.provider in LOCAL_EMBEDDING_PROVIDERS
+
+
 def probe_semantic(
     query: str,
     *,
@@ -57,7 +63,7 @@ def probe_semantic(
     strict: bool = False,
     now: datetime | None = None,
 ) -> SemanticProbe:
-    """Decide whether a remote query would be sent, without sending one.
+    """Decide whether a semantic query can run, without sending one.
 
     Reads the index to check the embedding generation exists and that the query
     fits the configured budget; performs no network I/O.
@@ -68,8 +74,10 @@ def probe_semantic(
     index" and "the provider is unreachable" are not the same failure and do not
     have the same fix.
 
-    ``strict`` re-raises instead of degrading, which is what ``--mode semantic``
-    and ``--strict-semantic`` require.
+    Local Ollama embeddings return an empty, successful probe because no consent
+    is needed to keep the query on the machine. Remote providers return a
+    challenge. ``strict`` re-raises instead of degrading, which is what
+    ``--mode semantic`` and ``--strict-semantic`` require.
     """
     failure: SemanticFailure = "index_missing"
     reason = SEMANTIC_INDEX_MISSING
@@ -78,6 +86,8 @@ def probe_semantic(
         if store.has_generation(pipeline.generation) and query.strip():
             tokens = pipeline.count_tokens(query)
             pipeline.check_budget(tokens, 1)
+            if _uses_local_embeddings(settings):
+                return SemanticProbe(reason="", failure=None)
             moment = now or datetime.now(timezone.utc)
             return SemanticProbe(
                 consent=RemoteConsent(
@@ -205,6 +215,8 @@ def search(
     if probe.consent is not None:
         if approval is not None and approval_covers(approval, probe.consent):
             semantic = build_semantic_retriever(database, settings)
+    elif probe.reason == "" and _uses_local_embeddings(settings):
+        semantic = build_semantic_retriever(database, settings)
     else:
         reason = probe.reason
 

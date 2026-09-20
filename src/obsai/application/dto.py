@@ -235,19 +235,21 @@ SemanticFailure = Literal["index_missing", "backend_unavailable"]
 class SemanticProbe(_Frozen):
     """Whether semantic retrieval can run for a query, and why not if it cannot.
 
-    Exactly one of the two fields carries the answer:
+    Remote probes use one of the two fields; local probes intentionally use neither:
 
     - ``consent`` is set when a remote query *would* be sent, so the caller must
       obtain approval before calling :func:`obsai.application.search.search`.
+    - A local provider can return both ``consent=None`` and ``reason=""``: the
+      semantic query stays on the machine and is ready without approval.
     - ``reason`` is the degradation notice to surface when it would not. It is
       also the message ``--mode semantic`` fails with.
 
     ``failure`` names the second case in a form a caller can branch on. ``reason``
     is prose, and prose reads much the same whether the index has no vectors or the
     provider is down — a caller that has to compare sentences to tell them apart
-    will get it wrong the first time the wording changes. The invariant is
-    therefore two-sided: ``consent`` is set exactly when ``reason`` is empty and
-    ``failure`` is ``None``.
+    will get it wrong the first time the wording changes. For remote providers,
+    ``consent`` is set exactly when ``reason`` is empty and ``failure`` is ``None``;
+    local providers use that same empty state to mean "ready without consent".
     """
 
     consent: RemoteConsent | None = None
@@ -609,4 +611,3 @@ class AgentResumeRequest(_Frozen):
     """Echoed user approval decision to resume an interrupted write."""
 
     approved: bool = True
-

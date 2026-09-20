@@ -21,10 +21,12 @@ path = "/path/to/your/ObsidianVault"
 # database = "/path/to/your/index.db"
 
 [embedding]
-# 向量模型提供商（支持 "openai" 或兼容 OpenAI API 的本地/远程端点，如 Ollama）
+# 向量模型提供商（"openai" 或本地 "ollama"）
 provider = "openai"
 # 向量模型名称
 model = "text-embedding-3-small"
+# Ollama 可填写 http://127.0.0.1:11434/v1；留空时读取 OLLAMA_BASE_URL
+# base_url = "http://127.0.0.1:11434/v1"
 # 向量模型版本标识（可选）
 # model_version = "v1"
 # 向量输出维度（必须与模型实际输出维度严格一致）
@@ -43,10 +45,12 @@ max_attempts = 4
 price_per_million_tokens_usd = 0.02
 
 [ask]
-# 问答与智能体决策大模型提供商（支持 "openai" 或兼容 OpenAI API 的服务）
+# 问答与智能体决策大模型提供商（"openai" 或本地 "ollama"）
 provider = "openai"
 # 问答使用的模型名称
 model = "gpt-4.1-mini"
+# Ollama 可填写 http://127.0.0.1:11434/v1；留空时读取 OLLAMA_BASE_URL
+# base_url = "http://127.0.0.1:11434/v1"
 # LLM 请求超时时间（秒）
 timeout_seconds = 60
 # 最大生成 Token 数

@@ -133,7 +133,8 @@ export type SemanticFailure = 'index_missing' | 'backend_unavailable'
 
 /** 与 `dto.py` 的 `SemanticProbe` 一致。
  *
- * `consent` 非空 ⟺ `reason` 为空串且 `failure` 为 `null`，这条契约是双向的。
+ * 远程 provider 成功探测时 `consent` 非空；本地 Ollama provider 则会返回
+ * `consent=null`、`reason=""`、`failure=null`，表示不需要同意即可使用语义检索。
  * 调用方按 `consent` 判断"要不要弹同意对话框"，按 `failure` 判断"该给用户哪条
  * 下一步"。`reason` 是给人看的散文——"索引没有向量"与"后端连不上"读起来几乎
  * 一样——所以**不能拿它分支**。

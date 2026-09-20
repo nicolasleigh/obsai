@@ -73,7 +73,12 @@ class OpenAIDecisionProvider:
 
         try:
             # 建立客户端连接（显式关闭 SDK 自动重试，由上层 Agent 状态机统一控制错误计数与安全上限）
-            with OpenAI(api_key=key, timeout=self.config.timeout_seconds, max_retries=0) as client:
+            with OpenAI(
+                api_key=key,
+                base_url=self.config.base_url,
+                timeout=self.config.timeout_seconds,
+                max_retries=0,
+            ) as client:
                 response = client.responses.create(
                     model=self.config.model,
                     instructions=INSTRUCTIONS,
