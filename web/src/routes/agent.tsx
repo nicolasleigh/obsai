@@ -64,6 +64,8 @@ export function AgentPage() {
 
   // 活跃工作流：优先采用最新返回的结果或 query 缓存
   const activeRun: AgentRunView | null = localRun ?? fetchedRun ?? null
+  // 一个笔记可能被多个检索/工具步骤命中；关联笔记展示的是集合，不应重复渲染同一个链接。
+  const selectedNoteIds = activeRun ? [...new Set(activeRun.selected_note_ids ?? [])] : []
   const isBusy = starting || isFetchingRun || resuming
   const effectiveError = actionError ?? (queryError ? present(queryError) : null)
 
@@ -334,10 +336,10 @@ export function AgentPage() {
             </div>
 
             {/* 命中笔记摘要 */}
-            {activeRun.selected_note_ids && activeRun.selected_note_ids.length > 0 && (
+            {selectedNoteIds.length > 0 && (
               <div className="flex flex-wrap items-center gap-2 pt-1 text-xs text-muted-foreground">
                 <span className="font-medium text-foreground/80">关联笔记:</span>
-                {activeRun.selected_note_ids.map((noteId) => (
+                {selectedNoteIds.map((noteId) => (
                   <Link
                     key={noteId}
                     to={noteHref(noteId, null)}

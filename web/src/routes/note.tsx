@@ -181,15 +181,21 @@ function Blocks({ blocks, highlight }: { blocks: readonly NoteBlockView[]; highl
     <div className="flex flex-col gap-3 text-sm leading-7">
       {groupBlocks(blocks).map((group, groupIndex) =>
         group.kind === 'list' ? (
-          <ul key={groupIndex} className="flex flex-col gap-1">
+          <ul key={`list-${groupIndex}`} className="flex flex-col gap-1">
             {group.blocks.map((block) => {
               const index = indexOf.get(block) ?? -1
-              return <BlockRow key={index} block={block} highlighted={index === highlight} />
+              return (
+                <BlockRow
+                  key={`list-item-${index}`}
+                  block={block}
+                  highlighted={index === highlight}
+                />
+              )
             })}
           </ul>
         ) : (
           <BlockRow
-            key={indexOf.get(group.block) ?? groupIndex}
+            key={`block-${indexOf.get(group.block) ?? groupIndex}`}
             block={group.block}
             highlighted={(indexOf.get(group.block) ?? -1) === highlight}
           />
