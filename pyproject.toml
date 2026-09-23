@@ -3,6 +3,7 @@ name = "obsai-cli"
 version = "0.1.0"
 description = "Local-first Obsidian AI agent CLI"
 readme = "README.md"
+license = { file = "LICENSE" }
 requires-python = ">=3.12"
 dependencies = [
     "typer>=0.12,<1",

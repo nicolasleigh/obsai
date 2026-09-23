@@ -4,6 +4,8 @@ Local-first Obsidian CLI with Markdown parsing, context-aware chunking, a
 rebuildable SQLite index, hybrid retrieval, and evidence-bounded answers.
 `obsai index update` synchronizes a configured Vault.
 
+Licensed under the [MIT License](LICENSE).
+
 ## Installation
 
 Requires Python 3.12+ and [uv](https://docs.astral.sh/uv/). Clone this repository,

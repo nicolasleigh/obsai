@@ -3,6 +3,8 @@
 本地优先（local-first）的 Obsidian CLI，具备 Markdown 解析、上下文感知分块、可重建的
 SQLite 索引、混合检索，以及有证据边界的回答。`obsai index update` 用于同步已配置的 Vault。
 
+本项目采用 [MIT License](LICENSE) 授权。
+
 > 本文件是 [README.md](README.md) 的简体中文译本，英文原版为唯一权威来源。
 
 ## 安装
